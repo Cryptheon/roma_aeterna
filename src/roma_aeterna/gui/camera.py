@@ -1,4 +1,4 @@
-from config import TILE_SIZE, MIN_ZOOM, MAX_ZOOM
+from ..config import TILE_SIZE, MIN_ZOOM, MAX_ZOOM
 
 class Camera:
     def __init__(self, map_width_px, map_height_px):

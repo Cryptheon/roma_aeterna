@@ -3,7 +3,7 @@ import noise
 import math
 from .map import GameMap, Tile
 from .objects import create_prefab
-from config import GRID_WIDTH, GRID_HEIGHT, RANDOM_SEED
+from ..config import GRID_WIDTH, GRID_HEIGHT, RANDOM_SEED
 
 class WorldGenerator:
     @staticmethod

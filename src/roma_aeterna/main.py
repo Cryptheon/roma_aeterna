@@ -1,9 +1,9 @@
 import threading
-from src.core.logger import SimLogger
-from src.world.generator import WorldGenerator
-from src.engine.loop import SimulationEngine
-from src.gui.renderer import Renderer
-from src.agent.base import Agent
+from .core.logger import SimLogger
+from .world.generator import WorldGenerator
+from .engine.loop import SimulationEngine
+from .gui.renderer import Renderer
+from .agent.base import Agent
 
 def main():
     # 1. Init Logging
