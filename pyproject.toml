@@ -23,6 +23,7 @@ dependencies = [
     "noise>=1.2.2",
     "requests>=2.31.0",
     "colorlog>=6.0.0",
+    "openai",
 ]
 
 [project.scripts]

@@ -5,7 +5,7 @@ import random
 from .weather import WeatherSystem
 from .chaos import ChaosEngine
 from .navigation import Pathfinder
-from src.llm.worker import LLMWorker
+from roma_aeterna.llm.worker import LLMWorker
 
 class SimulationEngine:
     def __init__(self, world, agents):

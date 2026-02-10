@@ -1,5 +1,5 @@
 import random
-from src.world.components import Flammable, Structural
+from roma_aeterna.world.components import Flammable, Structural
 
 class ChaosEngine:
     def __init__(self, world):
