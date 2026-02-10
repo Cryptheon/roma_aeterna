@@ -1,80 +1,82 @@
 import random
-import noise
-import math
 from .map import GameMap, Tile
 from .objects import create_prefab
-from ..config import GRID_WIDTH, GRID_HEIGHT, RANDOM_SEED
+from ..config import GRID_WIDTH, GRID_HEIGHT
 
 class WorldGenerator:
     @staticmethod
     def generate_rome() -> GameMap:
         world = GameMap(GRID_WIDTH, GRID_HEIGHT)
         
-        # 1. Terrain (Noise)
+        # 1. Fill World with "Barrier" (Trees/Mountains)
         for y in range(GRID_HEIGHT):
             for x in range(GRID_WIDTH):
-                scale = 0.05
-                elev = noise.pnoise2(x*scale, y*scale, base=RANDOM_SEED, octaves=4)
-                
-                t_type = "grass"
-                cost = 2.0
-                walkable = True
-                
-                if elev < -0.3:
-                    t_type = "water"
-                    cost = 999.0
-                    walkable = False
-                elif elev > 0.4:
-                    t_type = "mountain"
-                    cost = 8.0
-                    walkable = False
-                elif elev > 0.15:
-                    t_type = "forest"
-                    cost = 4.0
+                # Default to forest barrier
+                world.tiles[y][x] = Tile(x, y, "grass", 1.0, True)
 
-                world.tiles[y][x] = Tile(x, y, t_type, cost, walkable, effects=[])
+        # 2. Draw "Palatine Town" (Starter Area - Bottom Center)
+        WorldGenerator._draw_town(world, 64, 110, 20, 14, "Palatine Town")
 
-        # 2. Roads (Random Walkers from Center)
-        cx, cy = GRID_WIDTH // 2, GRID_HEIGHT // 2
-        for _ in range(6):
-            WorldGenerator._carve_road(world, cx, cy, random.randint(0, 360), 60)
+        # 3. Draw "Roma Invicta" (Big City - Top Center)
+        WorldGenerator._draw_town(world, 64, 30, 40, 30, "Roma City")
 
-        # 3. Buildings
-        for _ in range(50):
-            rx, ry = random.randint(5, GRID_WIDTH-5), random.randint(5, GRID_HEIGHT-5)
-            tile = world.get_tile(rx, ry)
-            # Place buildings on grass near roads
-            if tile and tile.terrain_type == "grass":
-                neighbors = WorldGenerator._get_neighbors(world, rx, ry)
-                if any(n.terrain_type == "road" for n in neighbors):
-                    b_type = random.choice(["Insula", "Temple", "Insula"])
-                    obj = create_prefab(b_type, rx, ry)
-                    world.add_object(obj)
-                    tile.movement_cost = 5.0 # Walkable but inside building is slow? Or block it
-        
+        # 4. Draw "Route I" (Connecting them)
+        WorldGenerator._draw_route(world, 64, 110, 64, 60)
+
         return world
 
     @staticmethod
-    def _carve_road(world, sx, sy, angle, length):
-        rad = math.radians(angle)
-        dx, dy = math.cos(rad), math.sin(rad)
-        cx, cy = float(sx), float(sy)
-        
-        for _ in range(length):
-            ix, iy = int(cx), int(cy)
-            t = world.get_tile(ix, iy)
-            if t and t.terrain_type not in ["water", "mountain"]:
-                t.terrain_type = "road"
+    def _draw_town(world, cx, cy, w, h, name):
+        # Clear land
+        for y in range(cy-h//2, cy+h//2):
+            for x in range(cx-w//2, cx+w//2):
+                t = world.tiles[y][x]
+                t.terrain_type = "path" # Town floor
                 t.movement_cost = 1.0
-            cx += dx + random.uniform(-0.2, 0.2)
-            cy += dy + random.uniform(-0.2, 0.2)
+
+        # Place Houses (2x2 grid size for visuals)
+        # Top Row
+        WorldGenerator._place_building(world, cx-5, cy-4, "House")
+        WorldGenerator._place_building(world, cx+5, cy-4, "House")
+        
+        # Special Buildings
+        if name == "Roma City":
+            WorldGenerator._place_building(world, cx, cy-8, "Temple") # Gym
+            WorldGenerator._place_building(world, cx-8, cy+2, "Market") # Mart
+            WorldGenerator._place_building(world, cx+8, cy+2, "Bathhouse") # Center
+        else:
+            WorldGenerator._place_building(world, cx-6, cy+2, "House") # Lab?
 
     @staticmethod
-    def _get_neighbors(world, x, y):
-        res = []
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dx == 0 and dy == 0: continue
-                t = world.get_tile(x+dx, y+dy)
-                if t: res.append(t)
-        return res
+    def _draw_route(world, x1, y1, x2, y2):
+        # Winding path
+        cy = y1
+        while cy > y2:
+            cy -= 1
+            # Path width 3
+            for i in range(-2, 3):
+                t = world.tiles[cy][x1+i]
+                t.terrain_type = "path"
+            
+            # Add Tall Grass on sides
+            if random.random() < 0.3:
+                WorldGenerator._place_grass(world, x1-3, cy)
+                WorldGenerator._place_grass(world, x1+3, cy)
+
+    @staticmethod
+    def _place_building(world, x, y, type_name):
+        obj = create_prefab(type_name, x, y)
+        world.add_object(obj)
+        # Make tile under building unwalkable
+        t = world.get_tile(x, y)
+        if t: 
+            t.movement_cost = 999.0
+            t.is_walkable = False
+
+    @staticmethod
+    def _place_grass(world, x, y):
+        t = world.get_tile(x, y)
+        if t:
+            t.terrain_type = "tall_grass"
+            t.movement_cost = 2.0 # Slows you down!
+            # world.add_object(create_prefab("TallGrass", x, y))

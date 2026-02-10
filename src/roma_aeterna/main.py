@@ -4,34 +4,43 @@ from .world.generator import WorldGenerator
 from .engine.loop import SimulationEngine
 from .gui.renderer import Renderer
 from .agent.base import Agent
+from .config import GRID_WIDTH, GRID_HEIGHT
 
 def main():
-    # 1. Init Logging
     logger = SimLogger()
-    logger.log_event("SYSTEM", "Initializing Rome: Aeterna...")
+    logger.log_event("SYSTEM", "Initializing Rome: Aeterna v2.0...")
 
-    # 2. Generate World
+    # 1. Generate The Geometric City
     rome_map = WorldGenerator.generate_rome()
-    logger.log_event("WORLD", f"Map Generated: {rome_map.width}x{rome_map.height}")
+    logger.log_event("WORLD", f"City Built: {rome_map.width}x{rome_map.height}")
 
-    # 3. Create Agents
+    # 2. Create Diverse Population
     agents = []
-    # Place Marcus in the center (Forum)
-    cx, cy = rome_map.width // 2, rome_map.height // 2
+    cx, cy = GRID_WIDTH // 2, GRID_HEIGHT // 2
     
-    marcus = Agent("Marcus Aurelius", "Senator", cx, cy)
-    marcus.inventory.append("Stylus")
-    agents.append(marcus)
+    # Senators in the Forum (Purple Squares)
+    agents.append(Agent("Marcus Aurelius", "Senator", cx, cy))
+    agents.append(Agent("Cicero", "Senator", cx+1, cy-1))
 
-    # Place Plebeians
-    for i in range(5):
-        agents.append(Agent(f"Plebeian {i+1}", "Plebeian", cx + i + 2, cy + 2))
+    # Legionaries guarding the Colosseum (Red Squares)
+    col_x = cx + 25
+    agents.append(Agent("Titus", "Legionary", col_x-5, cy))
+    agents.append(Agent("Maximus", "Legionary", col_x+5, cy))
 
-    # 4. Initialize Simulation Engine
+    # Merchants in the Market/Forum (Gold Squares)
+    agents.append(Agent("Hermes", "Merchant", cx-5, cy+2))
+
+    # Plebeians in the Subura (Grey Squares)
+    for i in range(10):
+        # Scatter them in the NE quadrant (Subura)
+        px = cx + 5 + (i * 2)
+        py = 10 + i
+        agents.append(Agent(f"Plebeian {i+1}", "Plebeian", px, py))
+
+    # 3. Initialize Engine
     engine = SimulationEngine(rome_map, agents)
 
-    # 5. Start GUI (Main Thread)
-    # The Renderer will tick the engine to keep visuals synced with logic
+    # 4. Start Render
     renderer = Renderer(engine)
     renderer.run()
 
