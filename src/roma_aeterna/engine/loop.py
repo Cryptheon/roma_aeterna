@@ -40,7 +40,7 @@ class SimulationEngine:
         self.event_bus = EventBus()
         self.economy = EconomySystem()
         self.llm_worker = LLMWorker(self)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
         # Simulation state
         self.tick_count: int = 0
@@ -207,6 +207,7 @@ class SimulationEngine:
 
     def _execute_autopilot_decision(self, agent: Any, decision: dict) -> None:
         """Execute a decision from the autopilot (same format as LLM decisions)."""
+        decision["_autopilot"] = True  # Tag for history tracking
         # Reuse the LLM worker's apply logic
         self.llm_worker._apply_decision(agent, decision)
 

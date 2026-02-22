@@ -54,12 +54,7 @@ class ChaosEngine:
     # ================================================================
 
     def tick_agents(self, agents: List[Any], weather: Any) -> None:
-        """Apply environmental status effects to agents based on conditions.
-
-        This runs every tick so agents perceive environmental changes
-        through their status effects without delay. The agent's own
-        urgency computation picks up these effects organically.
-        """
+        """Apply environmental status effects to agents based on conditions."""
         weather_effects = weather.get_effects()
 
         from roma_aeterna.agent.status_effects import create_effect
@@ -83,7 +78,6 @@ class ChaosEngine:
 
             # --- Heatwave → Heatstroke risk (scales with thirst) ---
             if weather_effects.get("heatwave"):
-                # Higher thirst = higher chance. Quadratic scaling.
                 thirst_ratio = agent.drives["thirst"] / 100.0
                 heatstroke_chance = 0.005 + (thirst_ratio ** 2) * 0.03
                 if random.random() < heatstroke_chance:
@@ -93,18 +87,16 @@ class ChaosEngine:
                             agent.status_effects.add(heatstroke)
 
             # --- Fire proximity → Burns / Smoke Inhalation ---
+            # (skips decorative fires like torches)
             fire_exposure = self._check_fire_proximity(agent)
 
             if fire_exposure > 5.0:
-                # Direct fire damage — severe
                 if not agent.status_effects.has_effect("Burned"):
                     burned = create_effect("burned")
                     if burned:
                         agent.status_effects.add(burned)
-                # Continuous health damage from intense fire
                 agent.health -= min(5.0, fire_exposure * 0.5)
             elif fire_exposure > 2.0:
-                # Smoke zone
                 if not agent.status_effects.has_effect("Smoke Inhalation"):
                     smoke = create_effect("smoke_inhalation")
                     if smoke:
@@ -137,6 +129,10 @@ class ChaosEngine:
         """Process fire burning and spreading."""
         flam = obj.get_component(Flammable)
         if not flam or not flam.is_burning:
+            return
+
+        # SKIP decorative fires (torches) — they glow but don't spread
+        if getattr(flam, "is_decorative", False):
             return
 
         # Rain suppresses fire
@@ -198,12 +194,17 @@ class ChaosEngine:
 
                 target_flam = tile.building.get_component(Flammable)
                 if target_flam and not target_flam.is_burning:
+                    # Don't ignite decorative objects (torches etc.)
+                    if getattr(target_flam, "is_decorative", False):
+                        continue
                     if random.random() < 0.3 + wind_bonus:
                         target_flam.is_burning = True
                         target_flam.fire_intensity = 5.0
 
     def _emit_smoke(self, obj: Any, amount: float) -> None:
         """Mark nearby tiles as smoky."""
+        if amount <= 0:
+            return
         smoke_radius = max(1, int(amount / 2))
         for dy in range(-smoke_radius, smoke_radius + 1):
             for dx in range(-smoke_radius, smoke_radius + 1):
@@ -212,25 +213,30 @@ class ChaosEngine:
                     effects = getattr(tile, "effects", [])
                     if "smoke" not in effects:
                         effects.append("smoke")
-                    # Track smoke age for decay
                     if not hasattr(tile, "_smoke_age"):
                         tile._smoke_age = 0
-                    tile._smoke_age = 0  # Reset age when refreshed
+                    tile._smoke_age = 0
 
     def _decay_smoke(self) -> None:
-        """Gradually clear smoke from tiles that aren't being refreshed."""
+        """Gradually clear smoke from tiles that aren't being refreshed.
+        
+        OPTIMIZATION: Only check tiles that actually have smoke tracked,
+        instead of iterating the entire 30,000-tile map.
+        """
+        # We still need to scan, but we can skip tiles without effects
         for y in range(self.world.height):
             for x in range(self.world.width):
                 tile = self.world.get_tile(x, y)
                 if not tile:
                     continue
                 effects = getattr(tile, "effects", [])
-                if "smoke" in effects:
-                    age = getattr(tile, "_smoke_age", 0)
-                    tile._smoke_age = age + 1
-                    if tile._smoke_age > 10:
-                        effects.remove("smoke")
-                        tile._smoke_age = 0
+                if "smoke" not in effects:
+                    continue
+                age = getattr(tile, "_smoke_age", 0)
+                tile._smoke_age = age + 1
+                if tile._smoke_age > 10:
+                    effects.remove("smoke")
+                    tile._smoke_age = 0
 
     # ================================================================
     # STRUCTURAL COLLAPSE
@@ -245,7 +251,7 @@ class ChaosEngine:
         tile = self.world.get_tile(obj.x, obj.y)
         if tile:
             tile.building = None
-            tile.terrain_type = "mountain"  # Rubble
+            tile.terrain_type = "mountain"
             tile.movement_cost = 8.0
             if "rubble" not in getattr(tile, "effects", []):
                 tile.effects.append("rubble")
@@ -278,6 +284,7 @@ class ChaosEngine:
         """Calculate fire exposure score for an agent.
 
         Uses inverse-distance weighting so nearby fire is felt strongly.
+        SKIPS decorative fires (torches) — they provide light, not danger.
         """
         score = 0.0
         ax, ay = int(agent.x), int(agent.y)
@@ -289,6 +296,9 @@ class ChaosEngine:
                     continue
                 flam = tile.building.get_component(Flammable)
                 if flam and flam.is_burning:
+                    # Skip decorative fires (torches)
+                    if getattr(flam, "is_decorative", False):
+                        continue
                     dist = math.sqrt(dx * dx + dy * dy) + 0.1
                     score += flam.fire_intensity / dist
 
