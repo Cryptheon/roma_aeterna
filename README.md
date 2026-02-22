@@ -1,5 +1,7 @@
 # 🏛️ Rome: Aeterna — Agent-Based Ancient World Simulator
 
+![Rome: Aeterna Simulation Interface](assets/screenshots/interface.png)
+
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active-orange)
@@ -131,6 +133,8 @@ python -m src.roma_aeterna.main
 | **Mouse Hover** | Inspect an entity. Hover over an agent to see their Health, Drives, Inventory, Autopilot state, and internal Thought. |
 | **Left Click** | *(New)* Open the full context inspection window for an agent to read their prompt. |
 | **ESC** | Save and Quit the simulation. |
+
+![Agent Inspection Window](assets/screenshots/inspect_agent.png)
 
 ---
 
