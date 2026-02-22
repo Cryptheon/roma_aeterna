@@ -456,16 +456,82 @@ class LLMWorker(threading.Thread):
                     memory_type="observation",
                 )
                 agent.action = "INSPECTING"
+                
+            elif action == "CRAFT":
+                target_item = decision.get("target", "")
+                
+                # Check if they are at a crafting station
+                # (You could refine this to check the specific station type)
+                from roma_aeterna.world.items import ITEM_DB
+                
+                # Find a recipe that produces the target item
+                recipe = next((r for r in ITEM_DB.recipes if r.output.lower() == target_item.lower()), None)
+                
+                if not recipe:
+                    agent.memory.add_event(f"I don't know how to craft {target_item}.", tick=tick, tags=["blocked"])
+                    agent.action = "IDLE"
+                else:
+                    # Check if agent has all required inputs
+                    has_all = True
+                    for req in recipe.inputs:
+                        if not any(i.name.lower() == req.lower() for i in agent.inventory):
+                            has_all = False
+                            break
+                            
+                    if has_all:
+                        # Remove inputs
+                        for req in recipe.inputs:
+                            for item in agent.inventory:
+                                if item.name.lower() == req.lower():
+                                    agent.inventory.remove(item)
+                                    break
+                        # Add output
+                        new_item = ITEM_DB.create_item(recipe.output)
+                        if new_item:
+                            agent.inventory.append(new_item)
+                            agent.memory.add_event(f"Successfully crafted {new_item.name}.", tick=tick, importance=2.0)
+                            agent.action = "CRAFTING"
+                    else:
+                        missing = ", ".join(recipe.inputs)
+                        agent.memory.add_event(f"Tried to craft {target_item} but lacked the materials ({missing}).", tick=tick, tags=["blocked"])
+                        agent.action = "IDLE"
+                        
+            elif action == "REFLECT":
+                # The LLM puts what it wants to remember in the "target" field
+                insight = decision.get("target", "")
+                if insight:
+                    agent.memory.add_event(
+                        f"Personal Reflection: {insight}", 
+                        tick=tick, 
+                        importance=3.0, # Give it high importance so it sticks around
+                        memory_type="feeling",
+                        tags=["reflection"]
+                    )
+                    agent.action = "REFLECTING"
+                else:
+                    agent.action = "IDLE"
 
             else:
                 agent.action = "IDLE"
 
     @staticmethod
     def _parse_json(text: str) -> Optional[Dict]:
+        # Strip common markdown wrappers
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
+            
+        # Fallback to the curly brace extractor
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
