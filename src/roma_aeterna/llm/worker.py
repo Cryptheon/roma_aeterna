@@ -1,9 +1,13 @@
 """
 LLM Worker — Async inference thread that processes agent decisions.
 
-Runs on a dedicated thread. Receives agents who need to "think",
-builds prompts, queries the LLM, parses JSON responses, and
-applies validated actions back to the engine.
+Now handles two types of requests:
+  1. Regular decisions (what should I do next?)
+  2. Conversation responses (someone spoke to me, what do I say back?)
+
+The worker checks for pending conversations first. If present, it builds
+a conversation-specific prompt. Otherwise, it builds the standard
+decision prompt.
 """
 
 import threading
@@ -15,7 +19,7 @@ from typing import Any, Dict, Optional, List
 from openai import AsyncOpenAI
 
 from roma_aeterna.config import VLLM_URL, VLLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
-from .prompts import build_prompt
+from .prompts import build_prompt, build_conversation_prompt
 
 
 class LLMWorker(threading.Thread):
@@ -28,20 +32,17 @@ class LLMWorker(threading.Thread):
         self.lock = threading.Lock()
         self.daemon = True
         self.batch_size: int = 10
-        self.use_mock: bool = True  # Set False when vLLM server is running
+        self.use_mock: bool = True
 
     def queue_request(self, agent: Any) -> None:
-        """Called from the simulation thread to enqueue an agent for inference."""
         with self.lock:
             if agent not in self.input_queue:
                 self.input_queue.append(agent)
 
     def run(self) -> None:
-        """Thread entry point."""
         asyncio.run(self._async_loop())
 
     async def _async_loop(self) -> None:
-        """Main async loop: drain queue, build prompts, run inference."""
         print("[LLM] Worker started")
         client = AsyncOpenAI(base_url=VLLM_URL, api_key="vllm")
 
@@ -59,20 +60,20 @@ class LLMWorker(threading.Thread):
 
             tasks = []
             for agent in batch:
-                prompt = build_prompt(
-                    agent, self.engine.world,
-                    self.engine.agents, self.engine.weather,
-                )
-                tasks.append(self._process_agent(client, agent, prompt))
+                tasks.append(self._process_agent(client, agent))
             await asyncio.gather(*tasks)
 
-    async def _process_agent(self, client: Any, agent: Any, prompt: str) -> None:
-        """Run inference for a single agent and apply the result."""
+    async def _process_agent(self, client: Any, agent: Any) -> None:
         try:
-            if self.use_mock:
-                decision = await self._mock_decision(agent)
+            # Check for pending conversation first
+            convo = agent.consume_pending_conversation()
+
+            if convo:
+                decision = await self._handle_conversation(
+                    client, agent, convo
+                )
             else:
-                decision = await self._llm_decision(client, prompt)
+                decision = await self._handle_decision(client, agent)
 
             if decision:
                 self._apply_decision(agent, decision)
@@ -81,8 +82,101 @@ class LLMWorker(threading.Thread):
         finally:
             agent.waiting_for_llm = False
 
-    async def _llm_decision(self, client: Any, prompt: str) -> Optional[Dict]:
-        """Query the actual vLLM server."""
+    # ================================================================
+    # CONVERSATION HANDLING
+    # ================================================================
+
+    async def _handle_conversation(self, client: Any, agent: Any,
+                                   convo: Dict) -> Optional[Dict]:
+        """Generate a response to someone speaking to the agent."""
+        speaker = convo["speaker"]
+        message = convo["message"]
+
+        if self.use_mock:
+            return await self._mock_conversation_response(agent, speaker, message)
+
+        prompt = build_conversation_prompt(agent, speaker, message)
+        try:
+            response = await client.chat.completions.create(
+                model=VLLM_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=LLM_TEMPERATURE,
+                max_tokens=LLM_MAX_TOKENS,
+            )
+            content = response.choices[0].message.content
+            parsed = self._parse_json(content)
+            if parsed and "speech" in parsed:
+                return {
+                    "thought": parsed.get("thought", "..."),
+                    "action": "TALK",
+                    "target": speaker,
+                    "speech": parsed["speech"],
+                }
+        except Exception as e:
+            print(f"[LLM] Conversation inference error: {e}")
+
+        return await self._mock_conversation_response(agent, speaker, message)
+
+    async def _mock_conversation_response(self, agent: Any,
+                                           speaker: str,
+                                           message: str) -> Dict:
+        """Generate a mock conversational response."""
+        await asyncio.sleep(0.02)
+
+        rel = agent.memory.relationships.get(speaker)
+        trust = rel.trust if rel else 0
+
+        # Response varies by trust level and personality
+        persona = agent.personality_seed
+        style = persona.get("speech_style", "speaks normally")
+
+        if trust > 30:
+            responses = [
+                f"Good to see you, {speaker}! What's on your mind?",
+                f"Ah, {speaker}! Always a pleasure. Tell me more.",
+                f"I was hoping to run into you, {speaker}.",
+            ]
+        elif trust < -20:
+            responses = [
+                f"What do you want, {speaker}?",
+                f"Hmm. Make it quick, {speaker}.",
+                f"I have nothing to say to you.",
+            ]
+        else:
+            responses = [
+                f"Salve, {speaker}. What brings you here?",
+                f"Ave. I'm listening.",
+                f"Interesting. Go on.",
+                f"Indeed. The times are... eventful.",
+            ]
+
+        # Share gossip if we have some
+        gossip = agent.memory.get_gossip_for_conversation()
+        speech = random.choice(responses)
+        if gossip and random.random() < 0.4:
+            speech += f" By the way, did you hear? {gossip.text}"
+
+        return {
+            "thought": f"{speaker} is speaking to me. I should respond.",
+            "action": "TALK",
+            "target": speaker,
+            "speech": speech,
+        }
+
+    # ================================================================
+    # DECISION HANDLING
+    # ================================================================
+
+    async def _handle_decision(self, client: Any,
+                               agent: Any) -> Optional[Dict]:
+        """Generate a full decision for the agent."""
+        if self.use_mock:
+            return await self._mock_decision(agent)
+
+        prompt = build_prompt(
+            agent, self.engine.world,
+            self.engine.agents, self.engine.weather,
+        )
         try:
             response = await client.chat.completions.create(
                 model=VLLM_MODEL,
@@ -94,123 +188,98 @@ class LLMWorker(threading.Thread):
             return self._parse_json(content)
         except Exception as e:
             print(f"[LLM] Inference error: {e}")
-            return None
+
+        return await self._mock_decision(agent)
 
     async def _mock_decision(self, agent: Any) -> Dict:
-        """Generate a plausible mock decision for testing without LLM.
+        """Mock decision when LLM is unavailable.
 
-        The mock system mirrors how a real agent would reason:
-        it checks how the agent FEELS (status effects + drives) and
-        acts on internal state, not on omniscient world knowledge.
+        This is the fallback, not the primary decision-maker.
+        The autopilot handles most routine cases; this covers
+        what's left: exploration, novel interactions, complex needs.
         """
         await asyncio.sleep(0.03)
 
         drives = agent.drives
 
-        # === SURVIVAL PRIORITY: React to status effects ===
-        # The agent feels burned/smoke — flee in a random direction
-        if agent.status_effects.has_effect("Burned") or agent.status_effects.has_effect("Smoke Inhalation"):
-            return {
-                "thought": "I'm choking! I need to get away from this smoke and fire!",
-                "action": "MOVE",
-                "direction": random.choice(["north", "south", "east", "west"]),
-            }
-
-        # Food poisoning — rest
-        if agent.status_effects.has_effect("Food Poisoning"):
-            return {
-                "thought": "My stomach... I can barely stand. I need to rest.",
-                "action": "REST",
-            }
-
-        # Heatstroke — seek water
-        if agent.status_effects.has_effect("Heatstroke"):
-            for item in agent.inventory:
-                if getattr(item, "item_type", None) == "drink":
-                    return {
-                        "thought": f"The heat is killing me. I must drink my {item.name}.",
-                        "action": "CONSUME",
-                        "target": item.name,
-                    }
-            if "Fountain" in agent.memory.known_locations:
+        # Use memory to find resources for unmet needs
+        if drives["thirst"] > 50:
+            loc = agent.memory.get_location_for_need("thirst")
+            if loc:
+                name, pos = loc
                 return {
-                    "thought": "I'm burning up. I remember a fountain nearby.",
-                    "action": "MOVE",
-                    "direction": self._direction_toward(
-                        agent, agent.memory.known_locations["Fountain"]
-                    ),
-                }
-            return {
-                "thought": "The heat is unbearable. I need to find water or shade.",
-                "action": "MOVE",
-                "direction": random.choice(["north", "south", "east", "west"]),
-            }
-
-        # === BIOLOGICAL NEEDS ===
-        # Critical thirst
-        if drives["thirst"] > 60:
-            for item in agent.inventory:
-                if getattr(item, "item_type", None) == "drink":
-                    return {
-                        "thought": f"I'm parched. I need to drink my {item.name}.",
-                        "action": "CONSUME",
-                        "target": item.name,
-                    }
-            if "Fountain" in agent.memory.known_locations:
-                return {
-                    "thought": "I need water desperately. I remember a fountain.",
-                    "action": "MOVE",
-                    "direction": self._direction_toward(
-                        agent, agent.memory.known_locations["Fountain"]
-                    ),
+                    "thought": f"I'm thirsty. I should head to {name}.",
+                    "action": "GOTO",
+                    "target": name,
                 }
 
-        # Hunger
-        if drives["hunger"] > 60:
-            for item in agent.inventory:
-                if getattr(item, "item_type", None) == "food":
-                    spoiled = getattr(item, "is_spoiled", lambda: False)
-                    if not spoiled():
-                        return {
-                            "thought": f"My stomach growls. Time to eat the {item.name}.",
-                            "action": "CONSUME",
-                            "target": item.name,
-                        }
+        if drives["hunger"] > 50:
+            # Try to buy food if we have money
+            if agent.denarii >= 3:
+                loc = agent.memory.get_location_for_need("hunger")
+                if loc:
+                    name, pos = loc
+                    return {
+                        "thought": f"I'm hungry and have coin. Let me visit {name}.",
+                        "action": "GOTO",
+                        "target": name,
+                    }
 
-        # Exhaustion
-        if drives["energy"] > 70:
-            return {
-                "thought": "I'm exhausted. I need to rest.",
-                "action": "REST",
-            }
+            loc = agent.memory.get_location_for_need("hunger")
+            if loc:
+                name, pos = loc
+                return {
+                    "thought": f"I need food. Maybe I can find some at {name}.",
+                    "action": "GOTO",
+                    "target": name,
+                }
 
-        # Loneliness
         if drives["social"] > 50:
             nearby = self._find_nearby_agents(agent)
             if nearby:
                 target = random.choice(nearby)
-                greetings = [
-                    f"Salve, {target.name}! How goes your day?",
-                    f"Ave! What news do you bring, {target.name}?",
-                    f"By Jupiter, {target.name}, this weather...",
-                    f"Well met, {target.name}. What brings you here?",
-                ]
+                rel = agent.memory.relationships.get(target.name)
+
+                # Different greetings for strangers vs friends
+                if rel and rel.familiarity > 10:
+                    greetings = [
+                        f"Salve, {target.name}! How have you been?",
+                        f"{target.name}! What news from the city?",
+                    ]
+                else:
+                    greetings = [
+                        f"Salve, friend. I am {agent.name}, a {agent.role}.",
+                        f"Ave! I don't believe we've met. I'm {agent.name}.",
+                    ]
+
                 return {
-                    "thought": f"I'm feeling lonely. I should talk to {target.name}.",
+                    "thought": f"I should introduce myself to {target.name}." if not rel
+                               else f"Good to see {target.name} again.",
                     "action": "TALK",
                     "target": target.name,
                     "speech": random.choice(greetings),
                 }
 
-        # === DEFAULT: Wander ===
-        directions = ["north", "south", "east", "west",
-                       "northeast", "northwest", "southeast", "southwest"]
+        if drives["comfort"] > 50:
+            loc = agent.memory.get_location_for_need("comfort")
+            if loc:
+                name, pos = loc
+                return {
+                    "thought": f"I need some peace. {name} might help.",
+                    "action": "GOTO",
+                    "target": name,
+                }
+
+        # Default: explore
+        directions = list(agent._scan_directions(self.engine.world))
+        if not directions:
+            directions = ["north", "south", "east", "west"]
+
         thoughts = [
-            "I should explore the area. What's around the next corner?",
-            "The Forum calls to me. Let me wander.",
-            "Perhaps I'll find something interesting this way.",
-            "A change of scenery would do me good.",
+            "Let me see what lies in this direction.",
+            "I should explore the area.",
             f"As a {agent.role}, I should be about my duties.",
+            "Perhaps I'll find something interesting nearby.",
         ]
         return {
             "thought": random.choice(thoughts),
@@ -218,23 +287,7 @@ class LLMWorker(threading.Thread):
             "direction": random.choice(directions),
         }
 
-    def _direction_toward(self, agent: Any, target: tuple) -> str:
-        """Compute approximate direction from agent to target coords."""
-        import math
-        dx = target[0] - agent.x
-        dy = target[1] - agent.y
-        if abs(dx) < 1 and abs(dy) < 1:
-            return "north"
-        angle = math.degrees(math.atan2(dy, dx))
-        if angle < 0:
-            angle += 360
-        dirs = ["east", "southeast", "south", "southwest",
-                "west", "northwest", "north", "northeast"]
-        idx = int((angle + 22.5) // 45) % 8
-        return dirs[idx]
-
     def _find_nearby_agents(self, agent: Any) -> List[Any]:
-        """Find agents within interaction range."""
         import math
         nearby = []
         for other in self.engine.agents:
@@ -245,8 +298,12 @@ class LLMWorker(threading.Thread):
                 nearby.append(other)
         return nearby
 
+    # ================================================================
+    # APPLY DECISION — Execute validated actions
+    # ================================================================
+
     def _apply_decision(self, agent: Any, decision: Dict) -> None:
-        """Validate and execute the agent's decision on the world."""
+        """Validate and execute the agent's decision."""
         with self.engine.lock:
             thought = decision.get("thought", "...")
             action = decision.get("action", "IDLE").upper()
@@ -267,6 +324,7 @@ class LLMWorker(threading.Thread):
                         f"Tried to go {direction} but: {msg}", tick=tick,
                         importance=1.0, tags=["blocked"],
                     )
+                    agent.autopilot.clear_path()
                     agent.action = "IDLE"
 
             elif action == "TALK":
@@ -277,6 +335,18 @@ class LLMWorker(threading.Thread):
                 )
                 if success:
                     agent.action = "TALKING"
+                    # Broadcast speech event for nearby agents
+                    from roma_aeterna.core.events import Event, EventType
+                    self.engine.event_bus.emit(
+                        Event(
+                            event_type=EventType.SPEECH.value,
+                            origin=(int(agent.x), int(agent.y)),
+                            radius=6.0,
+                            data={"speech": speech, "target": target},
+                            source_agent=agent.name,
+                            importance=1.5,
+                        )
+                    )
                 else:
                     agent.action = "IDLE"
 
@@ -305,7 +375,7 @@ class LLMWorker(threading.Thread):
 
             elif action == "DROP":
                 target = decision.get("target", "")
-                success, msg = agent.drop_item(target, self.engine.world)
+                agent.drop_item(target, self.engine.world)
                 agent.action = "IDLE"
 
             elif action == "REST":
@@ -326,6 +396,59 @@ class LLMWorker(threading.Thread):
                 agent.action = "TRADING"
                 agent.drives["social"] = max(0, agent.drives["social"] - 5)
 
+            elif action == "BUY":
+                target_item = decision.get("target", "")
+                market = decision.get("market", "")
+                # Find nearest market if not specified
+                if not market:
+                    for obj in self.engine.world.objects:
+                        from roma_aeterna.world.components import Interactable
+                        interact = obj.get_component(Interactable)
+                        if interact and interact.interaction_type == "trade":
+                            import math
+                            dist = math.sqrt(
+                                (obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2
+                            )
+                            if dist <= 5.0:
+                                market = obj.name
+                                break
+
+                if market:
+                    success, msg = self.engine.economy.buy_item(
+                        agent, market, target_item
+                    )
+                    agent.memory.add_event(msg, tick=tick, importance=2.0,
+                                           memory_type="event", tags=["trade"])
+                agent.action = "TRADING" if market else "IDLE"
+
+            elif action == "GOTO":
+                # Multi-step navigation to a named location
+                target = decision.get("target", "")
+                location = agent.memory.known_locations.get(target)
+                if location:
+                    agent.autopilot._set_path_toward(
+                        agent, location, target, self.engine.world
+                    )
+                    agent.action = "MOVING"
+                    agent.memory.add_event(
+                        f"Set off toward {target}.", tick=tick, importance=1.0,
+                    )
+                else:
+                    agent.memory.add_event(
+                        f"Wanted to go to {target} but don't know where it is.",
+                        tick=tick, importance=1.0, tags=["blocked"],
+                    )
+                    agent.action = "IDLE"
+
+            elif action == "WORK":
+                # Placeholder: agent performs their role at a building
+                agent.action = "WORKING"
+                agent.drives["comfort"] = max(0, agent.drives["comfort"] - 3)
+                agent.memory.add_event(
+                    f"Worked as a {agent.role}.", tick=tick, importance=1.0,
+                    tags=["work"],
+                )
+
             elif action == "INSPECT":
                 target = decision.get("target", "")
                 agent.memory.add_event(
@@ -339,12 +462,10 @@ class LLMWorker(threading.Thread):
 
     @staticmethod
     def _parse_json(text: str) -> Optional[Dict]:
-        """Extract JSON from LLM response text."""
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
@@ -352,5 +473,4 @@ class LLMWorker(threading.Thread):
                 return json.loads(text[start:end])
             except json.JSONDecodeError:
                 pass
-
         return None

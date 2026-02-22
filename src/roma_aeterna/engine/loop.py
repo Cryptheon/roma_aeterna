@@ -1,21 +1,15 @@
 """
 Simulation Engine — The tick orchestrator.
 
-Runs the core simulation loop: weather, chaos physics, agent biology,
-neuro-cognitive decision triggers, and movement execution.
+Decision flow per agent per tick:
+  1. Biology updates (drives, health, status effects)
+  2. LIF neuron integrates urgency → fires or doesn't
+  3. If fired (or path-following): Autopilot tries to handle it
+  4. If autopilot returns None: Queue for LLM inference
+  5. If autopilot returns a decision: Execute immediately
 
-Design philosophy: Agents are self-aware. The engine does NOT inject
-external threat knowledge into agents. Instead:
-  1. The Chaos Engine applies status effects (Burned, Smoke Inhalation, Wet...)
-  2. Status effects modify biological drives and carry urgency weights.
-  3. The agent's LIF neuron integrates urgency from its OWN internal state.
-  4. When the neuron fires, the LLM receives perception + self-assessment.
-  5. The LLM decides what to do based on what the agent sees and feels.
-
-This means threat response is fully emergent — no hardcoded threat scores.
-
-Persistence: The engine autosaves periodically and on shutdown.
-On startup, it attempts to load the most recent save.
+This means most ticks, most agents are on autopilot. The LLM only
+fires for novel situations, first meetings, and complex decisions.
 """
 
 import threading
@@ -25,11 +19,12 @@ from typing import Any, List, Optional
 
 from .weather import WeatherSystem
 from .chaos import ChaosEngine
+from roma_aeterna.core.events import EventBus, Event, EventType
+from roma_aeterna.engine.economy import EconomySystem
 from roma_aeterna.llm.worker import LLMWorker
 from roma_aeterna.config import TPS
 
 
-# Autosave interval in ticks (every ~5 minutes at 10 TPS)
 AUTOSAVE_INTERVAL: int = 3000
 
 
@@ -42,6 +37,8 @@ class SimulationEngine:
         self.agents = agents
         self.weather = WeatherSystem()
         self.chaos = ChaosEngine(world)
+        self.event_bus = EventBus()
+        self.economy = EconomySystem()
         self.llm_worker = LLMWorker(self)
         self.lock = threading.Lock()
 
@@ -51,17 +48,16 @@ class SimulationEngine:
         self.running: bool = True
         self.save_path: Optional[str] = save_path
 
-        # Assign personalities and starting inventories
+        # Track previous time of day for dawn/dusk events
+        self._prev_time_of_day: str = ""
+
+        # Initialize
         self._initialize_agents()
-
-        # Try to load existing save
         self._try_load_save()
-
-        # Start LLM inference thread
         self.llm_worker.start()
 
     def _initialize_agents(self) -> None:
-        """Give agents personalities and starting items if not already set."""
+        """Give agents personalities and starting items."""
         from roma_aeterna.llm.prompts import assign_personality, ROLE_STARTING_INVENTORY
         from roma_aeterna.world.items import ITEM_DB
 
@@ -83,27 +79,20 @@ class SimulationEngine:
                         pass
 
     def _try_load_save(self) -> None:
-        """Attempt to restore state from a save file."""
         from roma_aeterna.core.persistence import load_game, has_save
-
-        path = self.save_path
-        if has_save(path):
-            loaded = load_game(self, path)
-            if loaded:
-                print(f"[ENGINE] Resumed from save (tick {self.tick_count}, "
-                      f"day {self.weather.day_count})")
+        if has_save(self.save_path):
+            if load_game(self, self.save_path):
+                print(f"[ENGINE] Resumed from save (tick {self.tick_count})")
             else:
-                print("[ENGINE] Save file found but could not be loaded. "
-                      "Starting fresh.")
+                print("[ENGINE] Save found but failed to load. Starting fresh.")
         else:
-            print("[ENGINE] No save file found. Starting new simulation.")
+            print("[ENGINE] No save file. Starting new simulation.")
 
     # ================================================================
     # MAIN UPDATE
     # ================================================================
 
     def update(self, dt: float) -> None:
-        """Advance the simulation by one tick."""
         if self.paused:
             return
 
@@ -113,31 +102,33 @@ class SimulationEngine:
             # --- 1. Environment ---
             self.weather.update()
             self._sync_weather_to_world()
+            self._emit_time_events()
 
-            # Chaos physics: fire spread, structural collapse, water levels.
-            # Runs every 2 ticks as optimization (fire doesn't need per-tick).
             if self.tick_count % 2 == 0:
                 self.chaos.tick_environment(self.weather)
 
-            # Weather/fire effects on agents: EVERY tick.
-            # This is critical — agents must receive status effects promptly
-            # so their internal urgency reflects reality without delay.
             self.chaos.tick_agents(self.agents, self.weather)
 
-            # --- 2. Agents ---
-            weather_fx = self.weather.get_effects()
+            # --- 2. Economy ---
+            self.economy.tick(
+                self.world, self.agents, self.event_bus, self.tick_count
+            )
 
+            # --- 3. Event Bus ---
+            self.event_bus.process(self.agents, self.world, self.tick_count)
+
+            # --- 4. Agents ---
+            weather_fx = self.weather.get_effects()
             for agent in self.agents:
                 if not agent.is_alive:
                     continue
                 self._update_agent(agent, dt, weather_fx)
 
-            # --- 3. Autosave ---
+            # --- 5. Autosave ---
             if self.tick_count % AUTOSAVE_INTERVAL == 0:
                 self._autosave()
 
     def _sync_weather_to_world(self) -> None:
-        """Push weather description onto world for agent perception."""
         self.world._current_weather_desc = self.weather.get_description()
         time_descs = {
             "night": "It is deep night.",
@@ -152,47 +143,82 @@ class SimulationEngine:
             self.weather.time_of_day.value, ""
         )
 
+    def _emit_time_events(self) -> None:
+        """Emit dawn/dusk/new day events when time changes."""
+        current = self.weather.time_of_day.value
+        if current == self._prev_time_of_day:
+            return
+
+        if current == "dawn" and self._prev_time_of_day == "night":
+            self.event_bus.emit(Event(
+                event_type=EventType.DAWN.value,
+                radius=0,  # Global
+                importance=0.5,
+            ))
+        elif current == "dusk" and self._prev_time_of_day in ("afternoon", "evening"):
+            self.event_bus.emit(Event(
+                event_type=EventType.DUSK.value,
+                radius=0,
+                importance=0.5,
+            ))
+
+        self._prev_time_of_day = current
+
     # ================================================================
-    # PER-AGENT UPDATE
+    # PER-AGENT UPDATE — The dual-brain decision flow
     # ================================================================
 
     def _update_agent(self, agent: Any, dt: float,
                       weather_fx: dict) -> None:
         """Run one tick of agent simulation.
 
-        The agent's own internal state (drives, health, status effects)
-        determines urgency. No external threat injection.
+        Decision flow:
+          1. Update biology → LIF neuron fires or doesn't
+          2. If following a path (autopilot navigating): let autopilot handle movement
+          3. If brain fired:
+             a. Try autopilot first (System 1)
+             b. If autopilot returns None → queue for LLM (System 2)
+          4. Execute the decision
         """
-
-        # --- 1. Biology & Neuro-Cognitive Model ---
-        # update_biological ticks drives, status effects, health, and the
-        # LIF neuron. Returns True if urgency crossed threshold ("spike").
         did_fire = agent.update_biological(dt, weather_fx)
 
-        # --- 2. Decision Trigger ---
-        # If the brain fired, the agent needs to think (LLM inference).
+        # --- Autopilot path-following (runs even without brain fire) ---
+        if (agent.autopilot.path and
+                not did_fire and
+                not agent.waiting_for_llm and
+                agent.movement_cooldown == 0):
+            decision = agent.autopilot._follow_path(agent, self.world)
+            if decision:
+                self._execute_autopilot_decision(agent, decision)
+                return
+
+        # --- Brain fired: time to decide ---
         if did_fire and not agent.waiting_for_llm:
-            agent.waiting_for_llm = True
-            self.llm_worker.queue_request(agent)
+            # System 1: Try autopilot
+            decision = agent.autopilot.decide(agent, self.agents, self.world)
+
+            if decision:
+                # Autopilot handled it
+                self._execute_autopilot_decision(agent, decision)
+            else:
+                # System 2: Need LLM
+                agent.waiting_for_llm = True
+                self.llm_worker.queue_request(agent)
+
+    def _execute_autopilot_decision(self, agent: Any, decision: dict) -> None:
+        """Execute a decision from the autopilot (same format as LLM decisions)."""
+        # Reuse the LLM worker's apply logic
+        self.llm_worker._apply_decision(agent, decision)
 
     # ================================================================
     # PERSISTENCE
     # ================================================================
 
     def save(self, path: Optional[str] = None) -> str:
-        """Manually save the simulation state.
-
-        Args:
-            path: Optional save file path.
-
-        Returns:
-            The path the save was written to.
-        """
         from roma_aeterna.core.persistence import save_game
         return save_game(self, path or self.save_path)
 
     def _autosave(self) -> None:
-        """Periodic autosave (called from update loop)."""
         try:
             from roma_aeterna.core.persistence import save_game
             save_game(self, self.save_path)
@@ -200,28 +226,19 @@ class SimulationEngine:
             print(f"[ENGINE] Autosave failed: {e}")
 
     def shutdown(self) -> None:
-        """Clean shutdown: save state and stop threads.
-
-        Call this when the application is closing (e.g., ESC pressed,
-        window closed, or renderer exits).
-        """
         self.running = False
         print("[ENGINE] Shutting down...")
-
-        # Final save
         try:
             self.save()
         except Exception as e:
             print(f"[ENGINE] Shutdown save failed: {e}")
-
         print("[ENGINE] Goodbye.")
 
     # ================================================================
-    # QUERY METHODS (for GUI / external callers)
+    # QUERY METHODS
     # ================================================================
 
     def get_time_info(self) -> dict:
-        """Return current simulation time info for the GUI."""
         return {
             "tick": self.tick_count,
             "day": self.weather.day_count,
