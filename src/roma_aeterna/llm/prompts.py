@@ -2,18 +2,12 @@
 Prompt System — Personality templates, role archetypes, and dynamic
 context assembly for LLM inference.
 
-Each agent is initialized with a 'persona' that shapes their behavior.
-The prompt is assembled dynamically from: persona + self-assessment +
-drives + perception + memory + available actions.
-
-Key design: The agent's self-assessment (health, status effects, pain)
-is surfaced prominently in the prompt so the LLM can reason about
-survival and self-preservation naturally.
+Self-assessment (health, drives, status effects) lives here in the
+STATUS section — single source of truth, no duplication with perceive().
 """
 
 from typing import Dict, List, Optional, Any
 import random
-
 
 # ============================================================
 # Personality Archetypes
@@ -94,11 +88,6 @@ PERSONALITY_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-
-# ============================================================
-# Role -> Personality mapping
-# ============================================================
-
 ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
     "Senator": ["stoic_philosopher", "ambitious_politician"],
     "Gladiator": ["proud_warrior", "street_survivor"],
@@ -110,9 +99,7 @@ ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
     "Priest": ["devout_priest", "stoic_philosopher"],
 }
 
-
 def assign_personality(role: str, name: str) -> Dict[str, Any]:
-    """Select a personality template for an agent based on role."""
     options = ROLE_PERSONALITY_MAP.get(role, list(PERSONALITY_TEMPLATES.keys()))
     idx = hash(name) % len(options)
     key = options[idx]
@@ -121,11 +108,6 @@ def assign_personality(role: str, name: str) -> Dict[str, Any]:
         "archetype": key,
         **template,
     }
-
-
-# ============================================================
-# Starting Inventory by Role
-# ============================================================
 
 ROLE_STARTING_INVENTORY: Dict[str, List[str]] = {
     "Senator": ["Toga", "Stylus", "Wine", "Gold Coin", "Gold Coin"],
@@ -137,7 +119,6 @@ ROLE_STARTING_INVENTORY: Dict[str, List[str]] = {
     "Patrician": ["Toga", "Wine", "Perfume", "Gold Coin", "Honey Cake"],
     "Priest": ["Herbs", "Stylus", "Bread", "Laurel Wreath"],
 }
-
 
 # ============================================================
 # Dynamic Prompt Builder
@@ -155,20 +136,15 @@ YOUR FEARS:
 {fears_block}
 
 RULES OF THE WORLD:
-- You exist on a tile grid. You can move one tile at a time in 8 directions: north, south, east, west, northeast, northwest, southeast, southwest.
-- You can only interact with things that are nearby (within a few tiles).
-- You have physical needs: hunger, thirst, energy, social connection, and comfort. If hunger or thirst reach critical levels, you will start dying.
-- You can carry items and consume food/drink. Spoiled food will make you sick.
-- Buildings have functions: temples for prayer, fountains for drinking, markets for trading, bathhouses for rest.
-- Fire is deadly. If you see something burning or smell smoke, move away unless you have a very good reason not to.
-- Weather affects you: rain makes you wet and cold, heatwaves drain your thirst faster, storms are dangerous.
-- You can talk to other people. What you say will be heard by those nearby and remembered.
-- You remember things that happen to you and form opinions about people and places.
-- Night is more dangerous than day. Seek shelter when it gets dark.
-- PAY ATTENTION TO HOW YOU FEEL. If you are in pain, injured, burning, or sick, prioritize your survival above all other goals.
-
-IMPORTANT: You must respond ONLY with valid JSON. No other text."""
-
+- You exist on a grid. You can move one tile at a time in 8 directions or use GOTO to navigate to known places automatically.
+- You have physical needs. If hunger or thirst reach critical levels, you will die.
+- You can carry items, trade, buy from markets, and consume food/drink. Spoiled food will make you sick.
+- Buildings have functions: temples for prayer, fountains for drinking, markets for buying, bathhouses for rest.
+- You can work at specific buildings corresponding to your role to earn denarii.
+- Fire is deadly. If you see burning or smell smoke, get away.
+- You remember things and have preferences based on past experiences (e.g., if you got sick from bread, you dislike bread).
+- Pay attention to how you feel! Prioritize survival over routine.
+- IMPORTANT: You must respond ONLY with valid JSON. No other text."""
 
 STATUS_TEMPLATE = """CURRENT STATUS:
 Health: {health}/{max_health}{health_warning}
@@ -181,10 +157,8 @@ HOW YOU FEEL:
 INVENTORY:
 {inventory_summary}"""
 
-
 PERCEPTION_TEMPLATE = """WHAT YOU PERCEIVE:
 {perception_text}"""
-
 
 MEMORY_TEMPLATE = """YOUR RECENT MEMORIES:
 {recent_memories}
@@ -199,48 +173,48 @@ BELIEFS:
 {beliefs}
 
 KNOWN LOCATIONS:
-{known_locations}"""
+{known_locations}
 
+YOUR PREFERENCES (Likes/Dislikes):
+{preferences}"""
 
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
-Consider how you feel, what you see, and your personality.
+Consider how you feel, what you see, your memories, and your personality.
 {urgency_hint}
 Available actions:
-- MOVE: Move one tile. Specify direction (north, south, east, west, northeast, northwest, southeast, southwest).
-- TALK: Speak to a nearby person. Specify who and what you say.
-- INTERACT: Use a nearby building or object. Specify which one.
-- CONSUME: Eat food or drink from your inventory. Specify which item.
-- PICK_UP: Pick up an item from the ground. Specify which item.
-- DROP: Drop an item from your inventory. Specify which item.
-- REST: Stand still and recover energy.
-- SLEEP: Deep rest (best near shelter). Recovers energy significantly.
-- TRADE: Offer to trade with a nearby person. Specify who and what you offer/want.
-- INSPECT: Examine something closely.
-- IDLE: Do nothing in particular, think and observe.
+- MOVE: Move one tile. Must specify `direction` (north, south, east, west, northeast, northwest, southeast, southwest).
+- GOTO: Autopilot to a known location. Target MUST be an exact name from your KNOWN LOCATIONS.
+- BUY: Purchase an item. Specify the item as `target` and the market name as `market`. Both must be nearby.
+- WORK: Perform your role duties at an appropriate building to earn money.
+- CRAFT: Create an item if you have the materials. Specify the item as `target`.
+- TALK: Speak to someone. Target MUST be exactly as named in WHAT YOU PERCEIVE. Specify `speech`.
+- INTERACT: Use a nearby building or object. Target MUST be in WHAT YOU PERCEIVE.
+- CONSUME: Eat or drink. Target MUST be an exact item name from your INVENTORY.
+- PICK_UP / DROP: Target MUST be an exact item name.
+- REST / SLEEP: Stand still and recover energy.
+- TRADE: Specify `target` (who), `offer` (your item), and `want` (their item).
+- IDLE: Do nothing.
+- REFLECT: Commit a deep realization, belief, or suspicion to your memory. Specify the thought you want to memorize as `target`.
 
-Respond with this exact JSON format:
+CRITICAL INSTRUCTIONS:
+1. You must respond with raw JSON only. Do NOT wrap the output in ```json ... ``` markdown blocks.
+2. Only include keys in the JSON that are required for your chosen action.
+
+Respond with this EXACT format:
 {{
-    "thought": "your inner monologue explaining your reasoning (1-2 sentences in character)",
+    "thought": "your inner monologue (1-2 sentences)",
     "action": "ACTION_NAME",
-    "direction": "north/south/etc (only for MOVE)",
-    "target": "name of person, object, or item (for TALK, INTERACT, CONSUME, PICK_UP, DROP, TRADE, INSPECT)",
-    "speech": "what you say out loud (only for TALK)",
-    "offer": "item you're offering (only for TRADE)",
-    "want": "item you want (only for TRADE)"
+    "direction": "one of the 8 valid directions (only if MOVE)",
+    "target": "exact name of person/object/item/location (if applicable)",
+    "market": "exact name of market (only if BUY)",
+    "speech": "what you say out loud (only if TALK)",
+    "offer": "item you offer (only if TRADE)",
+    "want": "item you want (only if TRADE)"
 }}"""
 
-
-def build_prompt(agent: Any, world: Any, agents: List[Any],
-                 weather: Any) -> str:
-    """Assemble the full prompt for an agent's LLM inference call.
-
-    The prompt now prominently includes the agent's self-assessment
-    (health, pain, status effects) so the LLM can reason about
-    survival and self-preservation from first-person experience.
-    """
+def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str:
     persona = agent.personality_seed
 
-    # --- Personality Block ---
     personality_parts = []
     if persona.get("motivation"):
         personality_parts.append(f"Core motivation: {persona['motivation']}")
@@ -255,7 +229,6 @@ def build_prompt(agent: Any, world: Any, agents: List[Any],
     goals = persona.get("goals", ["survive", "find purpose"])
     fears = persona.get("fears", ["death", "dishonor"])
 
-    # --- System Prompt ---
     system = SYSTEM_PROMPT_TEMPLATE.format(
         name=agent.name,
         role=agent.role,
@@ -264,33 +237,22 @@ def build_prompt(agent: Any, world: Any, agents: List[Any],
         fears_block="\n".join(f"- {f}" for f in fears),
     )
 
-    # --- Health Warning ---
     health_warning = ""
     if agent.health < 20:
         health_warning = " ⚠ CRITICAL — YOU ARE DYING"
     elif agent.health < 50:
         health_warning = " ⚠ WOUNDED"
 
-    # --- Self-Assessment (single source of truth for how the agent feels) ---
     self_assessment_parts = []
-
-    # Health warnings (first-person sensation, not numbers)
     if agent.health < 20:
-        self_assessment_parts.append(
-            "⚠ CRITICAL: You are gravely injured. Your vision blurs and "
-            "your body screams in pain. You could die without help."
-        )
+        self_assessment_parts.append("⚠ CRITICAL: You are gravely injured. Your vision blurs and your body screams in pain. You could die without help.")
     elif agent.health < 50:
-        self_assessment_parts.append(
-            "You are wounded and in pain. Moving is difficult."
-        )
+        self_assessment_parts.append("You are wounded and in pain. Moving is difficult.")
 
-    # Status effect sensations (sorted by urgency — burned before wet)
     sensation_text = agent.status_effects.get_sensation_summary()
     if sensation_text:
         self_assessment_parts.append(sensation_text)
 
-    # Drive-level feelings (extreme values only — mild needs are in drives_summary)
     if agent.drives["thirst"] > 80:
         self_assessment_parts.append("Your throat is parched and cracked. You MUST find water soon or you will collapse.")
     elif agent.drives["thirst"] > 60:
@@ -303,8 +265,6 @@ def build_prompt(agent: Any, world: Any, agents: List[Any],
 
     if agent.drives["energy"] > 80:
         self_assessment_parts.append("You can barely keep your eyes open. Your body begs for rest.")
-    elif agent.drives["energy"] > 60:
-        self_assessment_parts.append("Fatigue weighs on you. You need to rest soon.")
 
     if agent.drives["comfort"] > 70:
         self_assessment_parts.append("You feel deeply miserable and uncomfortable.")
@@ -312,13 +272,11 @@ def build_prompt(agent: Any, world: Any, agents: List[Any],
     if agent.drives["social"] > 70:
         self_assessment_parts.append("A profound loneliness gnaws at you. You crave human connection.")
 
-    # Fallback
     if not self_assessment_parts:
         self_assessment_parts.append("You feel normal. No ailments.")
 
     self_assessment = "\n".join(self_assessment_parts)
 
-    # --- Status ---
     status = STATUS_TEMPLATE.format(
         health=int(agent.health),
         max_health=int(agent.max_health),
@@ -329,75 +287,51 @@ def build_prompt(agent: Any, world: Any, agents: List[Any],
         inventory_summary=agent.get_inventory_summary(),
     )
 
-    # --- Perception (includes the agent's own self-assessment) ---
     perception_text = agent.perceive(world, agents)
     perception = PERCEPTION_TEMPLATE.format(perception_text=perception_text)
 
-    # --- Memory ---
+    # Added preferences to memory template
+    prefs = agent.memory.get_preferences_summary()
     memory = MEMORY_TEMPLATE.format(
         recent_memories=agent.memory.get_recent_context(n=5),
         important_memories=agent.memory.get_important_memories(n=3),
         relationships=agent.memory.get_relationship_summary(),
         beliefs=agent.memory.get_beliefs_summary(),
         known_locations=agent.memory.get_known_locations_summary(),
+        preferences=prefs if prefs else "You have no strong preferences yet.",
     )
 
-    # --- Urgency Hint ---
-    # Give the LLM a nudge when the agent is in serious trouble.
-    # This doesn't inject fake knowledge — it just emphasizes
-    # what the agent already knows from its own body.
     urgency_hint = _build_urgency_hint(agent)
-
-    # --- Action Request ---
     action = ACTION_TEMPLATE.format(urgency_hint=urgency_hint)
 
-    # Combine
     full_prompt = "\n\n".join([system, status, perception, memory, action])
     return full_prompt
 
-
 def _build_urgency_hint(agent: Any) -> str:
-    """Generate a contextual urgency nudge based on the agent's state.
-
-    This surfaces what the agent already knows (from self-assessment)
-    as a decision-making priority hint.
-    """
     hints: List[str] = []
-
-    # Life-threatening conditions
     if agent.health < 20:
         hints.append("⚠ YOU ARE CRITICALLY INJURED. Your survival depends on your next action.")
-
     if agent.status_effects.has_effect("Burned"):
         hints.append("⚠ You are BURNED. Get away from fire and find help or water.")
-
     if agent.status_effects.has_effect("Smoke Inhalation"):
         hints.append("⚠ You are choking on SMOKE. Move to clear air immediately.")
-
     if agent.drives["thirst"] > 80:
         hints.append("⚠ You are desperately THIRSTY. Find water or you will die.")
-
     if agent.drives["hunger"] > 80:
         hints.append("⚠ You are STARVING. Find food urgently.")
-
     if agent.status_effects.has_effect("Food Poisoning"):
         hints.append("⚠ You have FOOD POISONING. Rest and find clean water.")
-
     if agent.status_effects.has_effect("Heatstroke"):
         hints.append("⚠ You have HEATSTROKE. Find shade and water immediately.")
 
     if not hints:
         return ""
-
     return "\n" + "\n".join(hints) + "\n"
 
-
-def build_conversation_prompt(agent: Any, speaker_name: str,
-                              speech: str) -> str:
-    """Build a prompt for generating a response to being spoken to."""
+def build_conversation_prompt(agent: Any, speaker_name: str, speech: str) -> str:
+    """Build a prompt for generating a response to being spoken to, using context history."""
     persona = agent.personality_seed
 
-    # Include self-state so the agent responds appropriately even when hurt
     state_note = ""
     if agent.health < 50:
         state_note = "\nNote: You are injured and in pain. This affects how you respond."
@@ -405,12 +339,18 @@ def build_conversation_prompt(agent: Any, speaker_name: str,
     if sensation:
         state_note += f"\nYou currently feel: {sensation}"
 
+    # Injecting the conversation back-and-forth history
+    convo_context = agent.memory.get_conversation_context(speaker_name)
+
     return f"""You are {agent.name}, a {agent.role} in Ancient Rome (161 AD).
 Personality: {persona.get('speech_style', 'speaks normally')}
 {state_note}
-{speaker_name} just said to you: "{speech}"
 
 Your relationship with {speaker_name}: {_get_relationship_desc(agent, speaker_name)}
+Recent conversation history with them: 
+{convo_context}
+
+{speaker_name} just said to you: "{speech}"
 
 Respond ONLY with JSON:
 {{
@@ -419,9 +359,7 @@ Respond ONLY with JSON:
     "attitude": "friendly/neutral/hostile/suspicious"
 }}"""
 
-
 def _get_relationship_desc(agent: Any, name: str) -> str:
-    """Get a brief relationship description for prompt context."""
     rel = agent.memory.relationships.get(name)
     if not rel:
         return "You don't know this person."
