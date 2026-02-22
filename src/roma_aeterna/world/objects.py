@@ -167,129 +167,106 @@ def create_prefab(type_name, x, y, **kwargs):
 
     elif type_name == "ArchOfTitus":
         obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
+        obj.add_component(Structural(hp=1500, max_hp=1500, material="marble"))
         obj.add_component(Footprint(width=3, height=2))
         obj.add_component(Elevation(height=3.0, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="triumphal_arch", layer=2))
 
-    elif type_name == "ArchOfSeptimiusSeverus":
+    elif type_name == "ArchOfSeptimusSeverus":
         obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2500, max_hp=2500, material="marble"))
-        obj.add_component(Footprint(width=5, height=3))
+        obj.add_component(Structural(hp=1800, max_hp=1800, material="marble"))
+        obj.add_component(Footprint(width=4, height=2))
         obj.add_component(Elevation(height=3.5, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="arch_large", layer=2))
 
     elif type_name == "ArchOfConstantine":
         obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2500, max_hp=2500, material="marble"))
-        obj.add_component(Footprint(width=5, height=3))
+        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
+        obj.add_component(Footprint(width=5, height=2))
         obj.add_component(Elevation(height=3.5, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="arch_large", layer=2))
 
     elif type_name == "MetaSudans":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=500, max_hp=500, material="stone"))
-        obj.add_component(Footprint(width=3, height=3))
-        obj.add_component(Decoration(sprite_key="fountain_large", layer=1,
-                                     animation="fountain"))
-        obj.add_component(WaterFeature(flow_rate=2.0, splash_radius=2.0))
-        obj.add_component(Liquid(amount=500))
-
-    elif type_name == "Colossus":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=1000, max_hp=1000, material="bronze"))
+        obj.obj_type = "infrastructure"
+        obj.add_component(Structural(hp=500, max_hp=500, material="concrete"))
         obj.add_component(Footprint(width=2, height=2))
-        obj.add_component(Elevation(height=5.0, shadow_length=4.0))
-        obj.add_component(Decoration(sprite_key="statue_equestrian", layer=2))
+        obj.add_component(Elevation(height=2.0))
+        obj.add_component(Decoration(sprite_key="fountain_large", layer=1))
+        obj.add_component(WaterFeature(flow_rate=2.0, splash_radius=2.0))
+        obj.add_component(Interactable(interaction_type="drink", capacity=5))
 
-    # ===== IMPERIAL FORA =====
-
-    elif type_name == "ForumOfAugustus":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=3000, max_hp=3000, material="marble"))
-        obj.add_component(Footprint(width=8, height=10))
-        obj.add_component(Elevation(height=2.0, shadow_length=1.5))
-        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
-        obj.add_component(Interactable(interaction_type="inspect", capacity=20))
-
-    elif type_name == "ForumOfNerva":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
-        obj.add_component(Footprint(width=4, height=10))
-        obj.add_component(Elevation(height=1.5, shadow_length=1.0))
-        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
-
-    elif type_name == "ForumOfVespasian":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2500, max_hp=2500, material="marble"))
-        obj.add_component(Footprint(width=8, height=8))
-        obj.add_component(Elevation(height=1.5, shadow_length=1.0))
-        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
-
-    elif type_name == "ForumOfTrajan":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=4000, max_hp=4000, material="marble"))
-        obj.add_component(Footprint(width=10, height=12))
-        obj.add_component(Elevation(height=2.0, shadow_length=1.5))
-        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
-        obj.add_component(Interactable(interaction_type="inspect", capacity=25))
-
-    elif type_name == "MarketsOfTrajan":
-        obj.obj_type = "building"
-        obj.add_component(Structural(hp=2000, max_hp=2000, material="brick"))
-        obj.add_component(Footprint(width=10, height=8))
-        obj.add_component(Elevation(height=3.0, shadow_length=2.0))
-        obj.add_component(Decoration(sprite_key="markets_trajan", layer=2))
-        obj.add_component(Interactable(interaction_type="trade", capacity=30))
-
-    elif type_name == "ColumnaTraiani":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
-        obj.add_component(Footprint(width=1, height=1))
-        obj.add_component(Elevation(height=5.0, shadow_length=3.0))
-        obj.add_component(Decoration(sprite_key="column", layer=2))
-
-    # ===== PALATINE HILL =====
-    
     elif type_name == "DomusTiberiana":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=3500, max_hp=3500, material="marble"))
-        obj.add_component(Footprint(width=14, height=10))
-        obj.add_component(Elevation(height=3.5, shadow_length=3.0))
+        obj.obj_type = "building"
+        obj.add_component(Structural(hp=1500, max_hp=1500, material="brick"))
+        obj.add_component(Footprint(width=12, height=10))
+        obj.add_component(Elevation(height=2.5, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="palace", layer=2))
-        obj.add_component(Interactable(interaction_type="audience", capacity=10))
 
     elif type_name == "DomusAugustana":
-        obj.obj_type = "monument"
-        obj.add_component(Structural(hp=4000, max_hp=4000, material="marble"))
-        obj.add_component(Footprint(width=18, height=16))
-        obj.add_component(Elevation(height=4.0, shadow_length=3.5))
+        obj.obj_type = "building"
+        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
+        obj.add_component(Footprint(width=15, height=10))
+        obj.add_component(Elevation(height=3.0, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="domus_augustana", layer=2))
-        obj.add_component(Interactable(interaction_type="audience", capacity=15))
 
-    elif type_name == "Stadium":
+    elif type_name == "StadiumOfDomitian":
         obj.obj_type = "monument"
-        obj.add_component(Structural(hp=2000, max_hp=2000, material="concrete"))
-        obj.add_component(Footprint(width=5, height=18))
+        obj.add_component(Structural(hp=1500, max_hp=1500, material="concrete"))
+        obj.add_component(Footprint(width=5, height=14))
         obj.add_component(Elevation(height=1.5, shadow_length=1.0))
         obj.add_component(Decoration(sprite_key="stadium", layer=2))
+        obj.add_component(Interactable(interaction_type="spectate", capacity=15))
 
-    # ===== CIRCUS MAXIMUS =====
-    
     elif type_name == "CircusMaximus":
         obj.obj_type = "monument"
-        obj.add_component(Structural(hp=5000, max_hp=5000, material="concrete"))
+        obj.add_component(Structural(hp=4000, max_hp=4000, material="concrete"))
         obj.add_component(Footprint(width=40, height=8))
         obj.add_component(Elevation(height=2.0, shadow_length=1.5))
         obj.add_component(Decoration(sprite_key="circus_maximus", layer=2))
         obj.add_component(Interactable(interaction_type="spectate", capacity=100))
 
-    # ===== CIVIC =====
-    
+    elif type_name == "ForumTraiani":
+        obj.obj_type = "monument"
+        obj.add_component(Structural(hp=2000, max_hp=2000, material="marble"))
+        obj.add_component(Footprint(width=10, height=12))
+        obj.add_component(Elevation(height=2.0, shadow_length=1.5))
+        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+
+    elif type_name == "MarketsOfTrajan":
+        obj.obj_type = "building"
+        obj.add_component(Structural(hp=1500, max_hp=1500, material="brick"))
+        obj.add_component(Footprint(width=8, height=6))
+        obj.add_component(Elevation(height=2.5, shadow_length=2.0))
+        obj.add_component(Decoration(sprite_key="markets_trajan", layer=2))
+        obj.add_component(Interactable(interaction_type="trade", capacity=20))
+
+    elif type_name == "ColumnOfTrajan":
+        obj.obj_type = "decoration"
+        obj.add_component(Structural(hp=1000, max_hp=1000, material="marble"))
+        obj.add_component(Footprint(width=2, height=2))
+        obj.add_component(Elevation(height=4.0, shadow_length=3.0))
+        obj.add_component(Decoration(sprite_key="column", layer=2))
+
+    elif type_name == "ForumAugusti":
+        obj.obj_type = "monument"
+        obj.add_component(Structural(hp=1500, max_hp=1500, material="marble"))
+        obj.add_component(Footprint(width=8, height=8))
+        obj.add_component(Elevation(height=1.5, shadow_length=1.0))
+        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+
+    elif type_name == "ForumNervae":
+        obj.obj_type = "monument"
+        obj.add_component(Structural(hp=1200, max_hp=1200, material="marble"))
+        obj.add_component(Footprint(width=4, height=10))
+        obj.add_component(Elevation(height=1.5, shadow_length=1.0))
+        obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+
+    # ===== ENTERTAINMENT & TRAINING =====
+
     elif type_name == "LudusMagnus":
         obj.obj_type = "building"
-        obj.add_component(Structural(hp=1500, max_hp=1500, material="concrete"))
-        obj.add_component(Footprint(width=10, height=10))
+        obj.add_component(Structural(hp=800, max_hp=800, material="brick"))
+        obj.add_component(Footprint(width=8, height=6))
         obj.add_component(Elevation(height=1.5, shadow_length=1.0))
         obj.add_component(Decoration(sprite_key="ludus", layer=2))
         obj.add_component(Interactable(interaction_type="train", capacity=20))
@@ -380,6 +357,7 @@ def create_prefab(type_name, x, y, **kwargs):
                                      animation="fountain"))
         obj.add_component(WaterFeature(flow_rate=1.0, splash_radius=1.0))
         obj.add_component(Interactable(interaction_type="drink", capacity=3))
+        obj.add_component(Liquid(amount=500.0, max_amount=500.0))
 
     elif type_name == "Column":
         obj.obj_type = "decoration"
@@ -444,11 +422,17 @@ def create_prefab(type_name, x, y, **kwargs):
     # ===== MISC =====
     
     elif type_name == "Torch":
+        # FIX: Torches are decorative — they burn visually but do NOT
+        # spread fire, emit damaging smoke, or hurt agents.
+        # The 'is_decorative' flag tells the chaos engine to skip them.
         obj.obj_type = "decoration"
         obj.add_component(Decoration(sprite_key="torch", layer=1,
                                      animation="torch"))
-        obj.add_component(Flammable(fuel=500, burn_rate=0.1,
-                                    is_burning=True, fire_intensity=3.0))
+        flam = Flammable(fuel=9999, burn_rate=0.0,
+                         is_burning=True, fire_intensity=3.0,
+                         smoke_output=0.0)
+        flam.is_decorative = True  # Chaos engine skips decorative fires
+        obj.add_component(flam)
 
     elif type_name == "Aqueduct":
         obj.obj_type = "infrastructure"

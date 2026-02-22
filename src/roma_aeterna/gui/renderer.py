@@ -71,6 +71,16 @@ class Renderer:
         # --- NEW: Agent Inspection Window State ---
         self.selected_agent = None
         self.agent_window_scroll = 0
+        self.agent_window_mode = "prompt"  # "prompt" or "history"
+        
+        # --- NEW: Right-click context menu ---
+        self.context_menu_agent = None     # Agent that was right-clicked
+        self.context_menu_pos = (0, 0)     # Screen position of menu
+        self.context_menu_visible = False
+        
+        # --- Tick rate decoupling (sim @ TPS, render @ FPS) ---
+        self._sim_accumulator = 0.0
+        self._sim_dt = 1.0 / TPS
         
         # Ambient animation timer
         self.anim_timer = 0.0
@@ -88,33 +98,60 @@ class Renderer:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         if self.selected_agent:
-                            self.selected_agent = None  # Close window instead of quitting
+                            self.selected_agent = None
+                        elif self.context_menu_visible:
+                            self.context_menu_visible = False
                         else:
                             running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    # --- Context menu click handling ---
+                    if self.context_menu_visible:
+                        clicked_option = self._check_context_menu_click(event.pos)
+                        if clicked_option == "prompt":
+                            self.selected_agent = self.context_menu_agent
+                            self.agent_window_mode = "prompt"
+                            self.agent_window_scroll = 0
+                        elif clicked_option == "history":
+                            self.selected_agent = self.context_menu_agent
+                            self.agent_window_mode = "history"
+                            self.agent_window_scroll = 0
+                        self.context_menu_visible = False
+                        continue
+                    
+                    # --- Agent inspection window open ---
                     if self.selected_agent:
-                        # Handle scrolling when window is open
-                        if event.button == 4: # Scroll Up
+                        if event.button == 4:  # Scroll Up
                             self.agent_window_scroll = max(0, self.agent_window_scroll - 40)
-                        elif event.button == 5: # Scroll Down
+                        elif event.button == 5:  # Scroll Down
                             self.agent_window_scroll += 40
-                        elif event.button == 1: # Left Click
-                            # Close window if clicking outside of it
+                        elif event.button == 1:  # Left Click
                             win_rect = pygame.Rect(100, 50, SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100)
                             if not win_rect.collidepoint(event.pos):
                                 self.selected_agent = None
                     else:
-                        # If clicking on an agent, open the window
-                        if event.button == 1 and hasattr(self.hovered_entity, 'role'):
+                        # Right-click on agent → context menu
+                        if event.button == 3 and hasattr(self.hovered_entity, 'role'):
+                            self.context_menu_agent = self.hovered_entity
+                            self.context_menu_pos = event.pos
+                            self.context_menu_visible = True
+                        # Left-click still opens prompt directly (backward compatible)
+                        elif event.button == 1 and hasattr(self.hovered_entity, 'role'):
                             self.selected_agent = self.hovered_entity
+                            self.agent_window_mode = "prompt"
                             self.agent_window_scroll = 0
 
-                # Only pass events to the camera if the UI window isn't open
-                if not self.selected_agent:
+                # Only pass events to the camera if no UI is open
+                if not self.selected_agent and not self.context_menu_visible:
                     self.camera.handle_event(event)
 
             self.camera.update(dt)
-            self.engine.update(dt)
+            
+            # --- Fixed tick rate: sim runs at TPS, render at FPS ---
+            self._sim_accumulator += dt
+            while self._sim_accumulator >= self._sim_dt:
+                self.engine.update(self._sim_dt)
+                self._sim_accumulator -= self._sim_dt
+            
             self.time_of_day = (self.time_of_day + dt / DAY_LENGTH_TICKS * TPS) % 1.0
             self._update_particles(dt)
             self._update_hover(mx, my)
@@ -547,6 +584,9 @@ class Renderer:
         # Draw the window if an agent is selected 
         if self.selected_agent:
             self._draw_agent_window(mx, my)
+            self._draw_lif_monitor(self.selected_agent)
+        elif self.context_menu_visible:
+            self._draw_context_menu()
         elif self.hovered_entity:
             self._draw_tooltip(mx, my)
     
@@ -720,15 +760,19 @@ class Renderer:
         return lines
 
     def _draw_agent_window(self, mx, my):
-        """Draws a large scrollable window showing the exact LLM Context Prompt."""
-        # Generate the exact prompt the LLM evaluates
-        from ..llm.prompts import build_prompt
-        prompt_text = build_prompt(
-            self.selected_agent, 
-            self.engine.world, 
-            self.engine.agents, 
-            self.engine.weather
-        )
+        """Draws a large scrollable window showing either the LLM prompt or decision history."""
+        if self.agent_window_mode == "prompt":
+            from ..llm.prompts import build_prompt
+            display_text = build_prompt(
+                self.selected_agent, 
+                self.engine.world, 
+                self.engine.agents, 
+                self.engine.weather
+            )
+            title_label = f"Agent Prompt: {self.selected_agent.name}"
+        else:
+            display_text = self.selected_agent.get_full_history_text()
+            title_label = f"Decision History: {self.selected_agent.name}"
 
         win_rect = pygame.Rect(100, 50, SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100)
         
@@ -742,19 +786,20 @@ class Renderer:
         pygame.draw.rect(self.screen, COLORS["ui_border_gold"], win_rect, 2, border_radius=8)
         
         # Header
-        header_text = self.font_title.render(f"Agent Core Inspection: {self.selected_agent.name}", True, COLORS["ui_text_accent"])
+        header_text = self.font_title.render(title_label, True, COLORS["ui_text_accent"])
         self.screen.blit(header_text, (win_rect.x + 20, win_rect.y + 20))
         pygame.draw.line(self.screen, COLORS["ui_border"], 
                          (win_rect.x + 20, win_rect.y + 45), 
                          (win_rect.right - 20, win_rect.y + 45))
 
-        # Close button hint
-        close_text = self.font_small.render("[ Click outside or press ESC to close ]", True, COLORS["ui_text_dim"])
-        self.screen.blit(close_text, (win_rect.right - 230, win_rect.y + 25))
+        # Close button hint + mode toggle
+        mode_hint = "History" if self.agent_window_mode == "prompt" else "Prompt"
+        close_text = self.font_small.render(f"[ ESC to close | Right-click for {mode_hint} ]", True, COLORS["ui_text_dim"])
+        self.screen.blit(close_text, (win_rect.right - 280, win_rect.y + 25))
 
         # Text area setup
         text_rect = pygame.Rect(win_rect.x + 20, win_rect.y + 55, win_rect.width - 40, win_rect.height - 75)
-        wrapped_lines = self._wrap_text(prompt_text, self.font_body, text_rect.width - 20)
+        wrapped_lines = self._wrap_text(display_text, self.font_body, text_rect.width - 20)
         
         line_height = self.font_body.get_height() + 4
         total_text_height = len(wrapped_lines) * line_height
@@ -790,6 +835,169 @@ class Renderer:
             thumb_y = sb_y + (self.agent_window_scroll / max_scroll) * (sb_h - thumb_h)
             pygame.draw.rect(self.screen, COLORS["ui_border_gold"], (sb_x, thumb_y, 4, thumb_h), border_radius=2)
 
+    def _draw_context_menu(self):
+        """Draws a small right-click popup menu with Inspect Prompt / Inspect History."""
+        if not self.context_menu_agent:
+            return
+        
+        menu_w = 180
+        menu_h = 62
+        mx, my = self.context_menu_pos
+        
+        # Keep menu on screen
+        menu_x = min(mx, SCREEN_WIDTH - menu_w - 5)
+        menu_y = min(my, SCREEN_HEIGHT - menu_h - 5)
+        
+        # Background
+        menu_surf = pygame.Surface((menu_w, menu_h), pygame.SRCALPHA)
+        pygame.draw.rect(menu_surf, (*COLORS["ui_bg"], 240),
+                         (0, 0, menu_w, menu_h), border_radius=4)
+        pygame.draw.rect(menu_surf, COLORS["ui_border_gold"],
+                         (0, 0, menu_w, menu_h), 1, border_radius=4)
+        
+        # Header (agent name)
+        name_txt = self.font_small.render(
+            f"◆ {self.context_menu_agent.name}", True, COLORS["ui_text_accent"])
+        menu_surf.blit(name_txt, (8, 4))
+        
+        # Divider
+        pygame.draw.line(menu_surf, COLORS["ui_border"],
+                         (4, 20), (menu_w - 4, 20))
+        
+        # Option 1: Inspect Prompt
+        mouse_pos = pygame.mouse.get_pos()
+        rel_y = mouse_pos[1] - menu_y
+        
+        opt1_hover = 22 <= rel_y < 40
+        opt2_hover = 42 <= rel_y < 60
+        
+        opt1_color = COLORS["ui_text_accent"] if opt1_hover else COLORS["ui_text"]
+        opt2_color = COLORS["ui_text_accent"] if opt2_hover else COLORS["ui_text"]
+        
+        if opt1_hover:
+            pygame.draw.rect(menu_surf, (*COLORS["ui_bg_light"], 200),
+                             (2, 22, menu_w - 4, 18))
+        if opt2_hover:
+            pygame.draw.rect(menu_surf, (*COLORS["ui_bg_light"], 200),
+                             (2, 42, menu_w - 4, 18))
+        
+        txt1 = self.font_small.render("📜  Inspect Prompt", True, opt1_color)
+        txt2 = self.font_small.render("📋  Inspect History", True, opt2_color)
+        menu_surf.blit(txt1, (10, 24))
+        menu_surf.blit(txt2, (10, 44))
+        
+        self.screen.blit(menu_surf, (menu_x, menu_y))
+    
+    def _check_context_menu_click(self, click_pos):
+        """Check if a click hit one of the context menu options. Returns 'prompt', 'history', or None."""
+        if not self.context_menu_visible or not self.context_menu_agent:
+            return None
+        
+        menu_w = 180
+        mx, my = self.context_menu_pos
+        menu_x = min(mx, SCREEN_WIDTH - menu_w - 5)
+        menu_y = min(my, SCREEN_HEIGHT - 62 - 5)
+        
+        cx, cy = click_pos
+        rel_x = cx - menu_x
+        rel_y = cy - menu_y
+        
+        if 0 <= rel_x <= menu_w:
+            if 22 <= rel_y < 40:
+                return "prompt"
+            elif 42 <= rel_y < 60:
+                return "history"
+        return None
+    
+    def _draw_lif_monitor(self, agent):
+        """Draw a live LIF neuron potential graph in the bottom-right corner."""
+        brain = agent.brain
+        history = list(brain.potential_history)
+        fire_hist = list(brain.fire_history)
+        
+        if len(history) < 2:
+            return
+        
+        # Layout — bottom-right, above minimap
+        graph_w = 180
+        graph_h = 80
+        padding = 6
+        graph_x = SCREEN_WIDTH - graph_w - 10
+        graph_y = 155  # Below minimap
+        
+        # Background panel
+        panel = pygame.Surface((graph_w, graph_h + 20), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (*COLORS["ui_bg"], 220),
+                         (0, 0, graph_w, graph_h + 20), border_radius=4)
+        pygame.draw.rect(panel, COLORS["ui_border_gold"],
+                         (0, 0, graph_w, graph_h + 20), 1, border_radius=4)
+        
+        # Title
+        title = self.font_label.render("LIF Neuron Monitor", True, COLORS["ui_text_accent"])
+        panel.blit(title, (padding, 2))
+        
+        # Graph area
+        gx = padding
+        gy = 14
+        gw = graph_w - padding * 2
+        gh = graph_h - 8
+        
+        # Graph background
+        pygame.draw.rect(panel, (25, 20, 18), (gx, gy, gw, gh))
+        
+        # Scale — find max for y-axis
+        threshold = brain.params.threshold
+        max_val = max(threshold * 1.3, max(history) * 1.1) if history else threshold * 1.3
+        if max_val < 0.01:
+            max_val = 1.0
+        
+        # Threshold line (dashed)
+        thresh_y = gy + gh - int((threshold / max_val) * gh)
+        thresh_y = max(gy, min(gy + gh - 1, thresh_y))
+        for dash_x in range(gx, gx + gw, 6):
+            pygame.draw.line(panel, (195, 168, 92, 150),
+                             (dash_x, thresh_y), (min(dash_x + 3, gx + gw), thresh_y), 1)
+        
+        # Threshold label
+        thresh_label = self.font_label.render(f"θ={threshold:.1f}", True, COLORS["ui_text_dim"])
+        panel.blit(thresh_label, (gx + gw - 30, thresh_y - 10))
+        
+        # Plot potential history
+        n = len(history)
+        step_x = gw / max(n - 1, 1)
+        
+        points = []
+        for i, val in enumerate(history):
+            px = gx + int(i * step_x)
+            py = gy + gh - int((val / max_val) * gh)
+            py = max(gy, min(gy + gh, py))
+            points.append((px, py))
+        
+        # Draw the line
+        if len(points) >= 2:
+            pygame.draw.lines(panel, (100, 200, 100), False, points, 1)
+        
+        # Draw fire events as red dots
+        for i, fired in enumerate(fire_hist):
+            if fired and i < len(points):
+                pygame.draw.circle(panel, (255, 60, 60), points[i], 3)
+        
+        # Current value label
+        current_v = history[-1] if history else 0
+        refractory = brain.is_refractory
+        status_color = (180, 80, 80) if refractory else (100, 200, 100)
+        status_text = "REFR" if refractory else f"V={current_v:.1f}"
+        val_label = self.font_label.render(status_text, True, status_color)
+        panel.blit(val_label, (gx + 2, gy + gh - 10))
+        
+        # Urgency (input current)
+        if brain.input_history:
+            urg = brain.input_history[-1]
+            urg_label = self.font_label.render(f"I={urg:.1f}", True, COLORS["ui_text_dim"])
+            panel.blit(urg_label, (gx + 2, gy + 1))
+        
+        self.screen.blit(panel, (graph_x, graph_y))
+    
     def _draw_minimap(self):
         mm_w, mm_h = 140, 105
         mm_x = SCREEN_WIDTH - mm_w - 10
