@@ -73,9 +73,15 @@ class Agent:
         self.max_health: float = 100.0
         self.is_alive: bool = True
 
+        # --- Personality (must be set before brain, which uses self.role) ---
+        self.personality_seed: Dict[str, Any] = personality_seed or {}
+        self.personal_goals: List[str] = []
+        self.fears: List[str] = []
+        self.values: List[str] = []
+
         # --- Cognitive ---
         self.brain = LeakyIntegrateAndFire(
-            LIFParameters(decay_rate=0.08, threshold=8.0, refractory_period=3.0)
+            self._make_lif_params()
         )
         self.autopilot = Autopilot()
         self.current_time: float = 0.0
@@ -90,27 +96,65 @@ class Agent:
         self.interaction_cooldown: int = 0
 
         # --- Conversation System ---
-        # When someone speaks to this agent, the message is queued here.
-        # Next time the brain fires (or autopilot checks), this triggers
-        # an LLM call to generate a response.
         self._pending_conversation: Optional[Dict[str, str]] = None
-
-        # --- Personality ---
-        self.personality_seed: Dict[str, Any] = personality_seed or {}
-        self.personal_goals: List[str] = []
-        self.fears: List[str] = []
-        self.values: List[str] = []
 
         # --- Memory & Effects ---
         self.memory = Memory()
         self.status_effects = StatusEffectManager()
 
         # --- Decision History (for LLM context + inspection) ---
-        self.decision_history: List[Dict[str, Any]] = []  # Last N decisions
-        self.prompt_history: List[str] = []                # Last N prompts sent
+        self.decision_history: List[Dict[str, Any]] = []
+        self.prompt_history: List[str] = []
+        self.llm_response_log: List[Dict[str, Any]] = []
         self._max_decision_history: int = 20
 
+        # --- Drive History (for past state awareness) ---
+        self.drive_snapshots: List[Dict[str, Any]] = []
+        self._snapshot_interval: float = 10.0
+        self._last_snapshot_time: float = 0.0
+
         self._init_common_knowledge()
+
+    def _make_lif_params(self) -> "LIFParameters":
+        """Create LIF parameters unique to this agent.
+        
+        Different roles have different cognitive rhythms:
+        - Warriors/Guards: low threshold, fast reactions (trained reflexes)
+        - Senators/Priests: higher threshold, more deliberate (thoughtful)
+        - Merchants/Craftsmen: medium threshold (balanced)
+        - Plebeians: slightly random (diverse population)
+        
+        A per-agent random offset prevents synchronized firing.
+        """
+        import random as _rng
+        
+        # Seed per-agent so it's deterministic but unique
+        _rng.seed(hash(self.uid) + 42)
+        
+        role_profiles = {
+            "Senator":          {"threshold": 10.0, "decay": 0.06, "refractory": 4.0},
+            "Patrician":        {"threshold": 9.0,  "decay": 0.07, "refractory": 3.5},
+            "Priest":           {"threshold": 11.0, "decay": 0.05, "refractory": 4.5},
+            "Gladiator":        {"threshold": 5.0,  "decay": 0.12, "refractory": 2.0},
+            "Guard (Legionary)":{"threshold": 5.5,  "decay": 0.10, "refractory": 2.5},
+            "Merchant":         {"threshold": 7.0,  "decay": 0.08, "refractory": 3.0},
+            "Craftsman":        {"threshold": 8.0,  "decay": 0.07, "refractory": 3.5},
+            "Plebeian":         {"threshold": 7.0,  "decay": 0.09, "refractory": 3.0},
+        }
+        
+        profile = role_profiles.get(self.role, {"threshold": 8.0, "decay": 0.08, "refractory": 3.0})
+        
+        # Add per-agent randomness (±20%) to desynchronize
+        jitter = lambda v: v * (0.8 + _rng.random() * 0.4)
+        
+        # Restore global random state
+        _rng.seed()
+        
+        return LIFParameters(
+            decay_rate=jitter(profile["decay"]),
+            threshold=jitter(profile["threshold"]),
+            refractory_period=jitter(profile["refractory"]),
+        )
 
     def _init_common_knowledge(self) -> None:
         """Things every Roman citizen would know."""
@@ -695,6 +739,18 @@ class Agent:
             return False
 
         input_current = self._compute_urgency()
+        
+        # Periodically snapshot drives for trend awareness
+        if self.current_time - self._last_snapshot_time >= self._snapshot_interval:
+            self._last_snapshot_time = self.current_time
+            self.drive_snapshots.append({
+                "tick": int(self.current_time),
+                "health": round(self.health, 1),
+                "drives": {k: round(v, 1) for k, v in self.drives.items()},
+            })
+            if len(self.drive_snapshots) > 6:  # Keep last ~60 seconds
+                self.drive_snapshots.pop(0)
+        
         return self.brain.update(dt, input_current, self.current_time)
 
     def _compute_urgency(self) -> float:
@@ -779,6 +835,18 @@ class Agent:
         if len(self.prompt_history) > 5:
             self.prompt_history.pop(0)
 
+    def record_llm_response(self, raw_text: str, parsed: Any = None, error: str = "") -> None:
+        """Store the raw LLM response for debugging."""
+        entry = {
+            "tick": int(self.current_time),
+            "raw": raw_text[:500],  # Truncate to avoid memory bloat
+            "parsed": str(parsed)[:200] if parsed else None,
+            "error": error,
+        }
+        self.llm_response_log.append(entry)
+        if len(self.llm_response_log) > 10:
+            self.llm_response_log.pop(0)
+
     def get_decision_history_summary(self, n: int = 5) -> str:
         """Return last N decisions as text for LLM context."""
         if not self.decision_history:
@@ -834,5 +902,32 @@ class Agent:
         for drive, value in self.drives.items():
             bucket = min(3, int(value / 25))
             word = labels.get(drive, ["fine", "ok", "bad", "terrible"])[bucket]
-            parts.append(f"- {drive.capitalize()}: {word} ({int(value)}%)")
+            
+            # Add trend indicator from snapshots
+            trend = ""
+            if len(self.drive_snapshots) >= 2:
+                prev_val = self.drive_snapshots[-2]["drives"].get(drive, value)
+                delta = value - prev_val
+                if delta > 5:
+                    trend = " ↑ rising"
+                elif delta < -5:
+                    trend = " ↓ falling"
+            
+            parts.append(f"- {drive.capitalize()}: {word} ({int(value)}%){trend}")
         return "\n".join(parts)
+
+    def get_past_states_summary(self, n: int = 3) -> str:
+        """Return recent drive snapshots as text for LLM context."""
+        if len(self.drive_snapshots) < 2:
+            return "No prior state data yet."
+        
+        recent = self.drive_snapshots[-n:]
+        lines = []
+        for snap in recent:
+            d = snap["drives"]
+            lines.append(
+                f"  Tick {snap['tick']}: HP={snap['health']}, "
+                f"Hunger={d['hunger']:.0f}%, Thirst={d['thirst']:.0f}%, "
+                f"Energy={d['energy']:.0f}%, Social={d['social']:.0f}%"
+            )
+        return "\n".join(lines)

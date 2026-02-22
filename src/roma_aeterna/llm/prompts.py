@@ -154,6 +154,9 @@ Denarii (money): {denarii}
 HOW YOU FEEL:
 {self_assessment}
 
+RECENT TREND (how your state has changed):
+{past_states}
+
 INVENTORY:
 {inventory_summary}"""
 
@@ -213,7 +216,7 @@ Respond with this EXACT format:
     "speech": "what you say out loud (only if TALK)",
     "offer": "item you offer (only if TRADE)",
     "want": "item you want (only if TRADE)"
-}}"""
+}}/no_think"""
 
 def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str:
     persona = agent.personality_seed
@@ -287,6 +290,7 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str
         denarii=agent.denarii,
         drives_summary=agent.get_drives_summary(),
         self_assessment=self_assessment,
+        past_states=agent.get_past_states_summary(n=3),
         inventory_summary=agent.get_inventory_summary(),
     )
 
