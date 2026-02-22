@@ -64,6 +64,17 @@ class Renderer:
         # Ambient animation timer
         self.anim_timer = 0.0
 
+        # Tooltip state
+        self.hovered_entity = None
+        self.hover_timer = 0.0
+        
+        # --- NEW: Agent Inspection Window State ---
+        self.selected_agent = None
+        self.agent_window_scroll = 0
+        
+        # Ambient animation timer
+        self.anim_timer = 0.0
+
     def run(self):
         running = True
         while running:
@@ -76,8 +87,31 @@ class Renderer:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        running = False
-                self.camera.handle_event(event)
+                        if self.selected_agent:
+                            self.selected_agent = None  # Close window instead of quitting
+                        else:
+                            running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.selected_agent:
+                        # Handle scrolling when window is open
+                        if event.button == 4: # Scroll Up
+                            self.agent_window_scroll = max(0, self.agent_window_scroll - 40)
+                        elif event.button == 5: # Scroll Down
+                            self.agent_window_scroll += 40
+                        elif event.button == 1: # Left Click
+                            # Close window if clicking outside of it
+                            win_rect = pygame.Rect(100, 50, SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100)
+                            if not win_rect.collidepoint(event.pos):
+                                self.selected_agent = None
+                    else:
+                        # If clicking on an agent, open the window
+                        if event.button == 1 and hasattr(self.hovered_entity, 'role'):
+                            self.selected_agent = self.hovered_entity
+                            self.agent_window_scroll = 0
+
+                # Only pass events to the camera if the UI window isn't open
+                if not self.selected_agent:
+                    self.camera.handle_event(event)
 
             self.camera.update(dt)
             self.engine.update(dt)
@@ -89,7 +123,7 @@ class Renderer:
             pygame.display.flip()
 
         pygame.quit()
-
+            
     def _draw_frame(self, mx, my):
         sky_color = self._get_sky_color()
         self.screen.fill(sky_color)
@@ -510,7 +544,10 @@ class Renderer:
         self._draw_main_textbox()
         self._draw_minimap()
         
-        if self.hovered_entity:
+        # Draw the window if an agent is selected 
+        if self.selected_agent:
+            self._draw_agent_window(mx, my)
+        elif self.hovered_entity:
             self._draw_tooltip(mx, my)
     
     def _draw_info_bar(self):
@@ -662,6 +699,97 @@ class Renderer:
         
         self.screen.blit(tip_surf, (tip_x, tip_y))
     
+    def _wrap_text(self, text, font, max_width):
+        """Helper to wrap long text into multiple lines for PyGame."""
+        lines = []
+        for paragraph in text.split('\n'):
+            if not paragraph:
+                lines.append("")
+                continue
+            words = paragraph.split(' ')
+            current_line = []
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                if font.size(test_line)[0] <= max_width:
+                    current_line.append(word)
+                else:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+            if current_line:
+                lines.append(' '.join(current_line))
+        return lines
+
+    def _draw_agent_window(self, mx, my):
+        """Draws a large scrollable window showing the exact LLM Context Prompt."""
+        # Generate the exact prompt the LLM evaluates
+        from ..llm.prompts import build_prompt
+        prompt_text = build_prompt(
+            self.selected_agent, 
+            self.engine.world, 
+            self.engine.agents, 
+            self.engine.weather
+        )
+
+        win_rect = pygame.Rect(100, 50, SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100)
+        
+        # Dim the background
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        # Window Background & Border
+        pygame.draw.rect(self.screen, (*COLORS["ui_bg"], 250), win_rect, border_radius=8)
+        pygame.draw.rect(self.screen, COLORS["ui_border_gold"], win_rect, 2, border_radius=8)
+        
+        # Header
+        header_text = self.font_title.render(f"Agent Core Inspection: {self.selected_agent.name}", True, COLORS["ui_text_accent"])
+        self.screen.blit(header_text, (win_rect.x + 20, win_rect.y + 20))
+        pygame.draw.line(self.screen, COLORS["ui_border"], 
+                         (win_rect.x + 20, win_rect.y + 45), 
+                         (win_rect.right - 20, win_rect.y + 45))
+
+        # Close button hint
+        close_text = self.font_small.render("[ Click outside or press ESC to close ]", True, COLORS["ui_text_dim"])
+        self.screen.blit(close_text, (win_rect.right - 230, win_rect.y + 25))
+
+        # Text area setup
+        text_rect = pygame.Rect(win_rect.x + 20, win_rect.y + 55, win_rect.width - 40, win_rect.height - 75)
+        wrapped_lines = self._wrap_text(prompt_text, self.font_body, text_rect.width - 20)
+        
+        line_height = self.font_body.get_height() + 4
+        total_text_height = len(wrapped_lines) * line_height
+        
+        # Clamp scroll position
+        max_scroll = max(0, total_text_height - text_rect.height)
+        self.agent_window_scroll = min(self.agent_window_scroll, max_scroll)
+
+        # Draw lines clipped to the window boundaries
+        old_clip = self.screen.get_clip()
+        self.screen.set_clip(text_rect)
+        
+        y_offset = text_rect.y - self.agent_window_scroll
+        for line in wrapped_lines:
+            if y_offset + line_height > text_rect.y and y_offset < text_rect.bottom:
+                if line:
+                    # Highlight ALL CAPS headings in gold
+                    color = COLORS["ui_text_accent"] if line.isupper() and len(line) > 3 else COLORS["ui_text"]
+                    txt_surf = self.font_body.render(line, True, color)
+                    self.screen.blit(txt_surf, (text_rect.x, y_offset))
+            y_offset += line_height
+            
+        self.screen.set_clip(old_clip)
+
+        # Scrollbar
+        if max_scroll > 0:
+            sb_x = win_rect.right - 10
+            sb_y = text_rect.y
+            sb_h = text_rect.height
+            pygame.draw.rect(self.screen, (60, 50, 40), (sb_x, sb_y, 4, sb_h))
+            
+            thumb_h = max(30, sb_h * (text_rect.height / total_text_height))
+            thumb_y = sb_y + (self.agent_window_scroll / max_scroll) * (sb_h - thumb_h)
+            pygame.draw.rect(self.screen, COLORS["ui_border_gold"], (sb_x, thumb_y, 4, thumb_h), border_radius=2)
+
     def _draw_minimap(self):
         mm_w, mm_h = 140, 105
         mm_x = SCREEN_WIDTH - mm_w - 10
