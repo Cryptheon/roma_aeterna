@@ -75,7 +75,7 @@ class Agent:
 
         # --- Cognitive ---
         self.brain = LeakyIntegrateAndFire(
-            LIFParameters(decay_rate=0.5, threshold=50.0, refractory_period=5.0)
+            LIFParameters(decay_rate=0.08, threshold=8.0, refractory_period=3.0)
         )
         self.autopilot = Autopilot()
         self.current_time: float = 0.0
@@ -104,6 +104,11 @@ class Agent:
         # --- Memory & Effects ---
         self.memory = Memory()
         self.status_effects = StatusEffectManager()
+
+        # --- Decision History (for LLM context + inspection) ---
+        self.decision_history: List[Dict[str, Any]] = []  # Last N decisions
+        self.prompt_history: List[str] = []                # Last N prompts sent
+        self._max_decision_history: int = 20
 
         self._init_common_knowledge()
 
@@ -748,6 +753,63 @@ class Agent:
         if self.autopilot.path:
             lines.append(f"Path: {self.autopilot.destination_name} ({len(self.autopilot.path)} steps)")
         return lines
+
+    def record_decision(self, decision: Dict[str, Any], source: str = "llm") -> None:
+        """Record a decision for history tracking.
+        
+        Args:
+            decision: The decision dict (thought, action, target, etc.)
+            source: 'llm' or 'autopilot'
+        """
+        entry = {
+            "tick": int(self.current_time),
+            "source": source,
+            "thought": decision.get("thought", "..."),
+            "action": decision.get("action", "IDLE"),
+            "target": decision.get("target", ""),
+            "speech": decision.get("speech", ""),
+        }
+        self.decision_history.append(entry)
+        if len(self.decision_history) > self._max_decision_history:
+            self.decision_history.pop(0)
+
+    def record_prompt(self, prompt: str) -> None:
+        """Store the last prompt sent to the LLM for inspection."""
+        self.prompt_history.append(prompt)
+        if len(self.prompt_history) > 5:
+            self.prompt_history.pop(0)
+
+    def get_decision_history_summary(self, n: int = 5) -> str:
+        """Return last N decisions as text for LLM context."""
+        if not self.decision_history:
+            return "You have not taken any actions yet."
+        recent = self.decision_history[-n:]
+        lines = []
+        for d in recent:
+            src = "[auto]" if d["source"] == "autopilot" else "[think]"
+            action_desc = f"{d['action']}"
+            if d.get("target"):
+                action_desc += f" → {d['target']}"
+            if d.get("speech"):
+                action_desc += f' (said: "{d["speech"][:40]}")'
+            lines.append(f"  {src} {action_desc}: {d['thought'][:60]}")
+        return "\n".join(lines)
+
+    def get_full_history_text(self) -> str:
+        """Return full decision history for the inspection window."""
+        if not self.decision_history:
+            return "No decisions recorded yet."
+        lines = []
+        for i, d in enumerate(self.decision_history):
+            src = "AUTOPILOT" if d["source"] == "autopilot" else "LLM"
+            lines.append(f"[Tick {d['tick']}] ({src}) Action: {d['action']}")
+            lines.append(f"  Thought: {d['thought']}")
+            if d.get("target"):
+                lines.append(f"  Target: {d['target']}")
+            if d.get("speech"):
+                lines.append(f"  Speech: \"{d['speech']}\"")
+            lines.append("")
+        return "\n".join(lines)
 
     def get_inventory_summary(self) -> str:
         if not self.inventory:

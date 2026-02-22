@@ -178,6 +178,9 @@ KNOWN LOCATIONS:
 YOUR PREFERENCES (Likes/Dislikes):
 {preferences}"""
 
+DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
+{decision_history}"""
+
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
 Consider how you feel, what you see, your memories, and your personality.
 {urgency_hint}
@@ -304,7 +307,13 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str
     urgency_hint = _build_urgency_hint(agent)
     action = ACTION_TEMPLATE.format(urgency_hint=urgency_hint)
 
-    full_prompt = "\n\n".join([system, status, perception, memory, action])
+    # Decision history — tells the LLM what the agent did recently
+    decision_history_text = agent.get_decision_history_summary(n=5)
+    decision_history = DECISION_HISTORY_TEMPLATE.format(
+        decision_history=decision_history_text,
+    )
+
+    full_prompt = "\n\n".join([system, status, perception, memory, decision_history, action])
     return full_prompt
 
 def _build_urgency_hint(agent: Any) -> str:

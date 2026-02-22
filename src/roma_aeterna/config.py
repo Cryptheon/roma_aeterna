@@ -24,9 +24,9 @@ DEFAULT_ZOOM: float = 2.0
 
 # --- LLM ---
 VLLM_URL: str = "http://localhost:8000/v1"
-VLLM_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.2"
-LLM_TEMPERATURE: float = 0.8
-LLM_MAX_TOKENS: int = 300
+VLLM_MODEL: str = "Qwen/Qwen3-30B-A3B-GPTQ-Int4" #"Qwen/Qwen3-8B-AWQ" #"Qwen/Qwen3-30B-A3B-GPTQ-Int4"
+LLM_TEMPERATURE: float = 0.2
+LLM_MAX_TOKENS: int = 256
 
 # --- Agent Perception ---
 PERCEPTION_RADIUS: int = 8          # Tiles an agent can "see"
@@ -35,13 +35,13 @@ MAX_INVENTORY_SIZE: int = 12
 MEMORY_SHORT_TERM_CAP: int = 20
 MEMORY_LONG_TERM_CAP: int = 50
 
-# --- Agent Biology ---
-HUNGER_RATE: float = 0.4            # Per tick base
-ENERGY_RATE: float = 0.25
-SOCIAL_RATE: float = 0.08
-THIRST_RATE: float = 0.35
-COMFORT_RATE: float = 0.05
-HEALTH_REGEN_RATE: float = 0.1      # When well-fed and rested
+# --- Agent Biology (TUNED: ~3x gentler than before) ---
+HUNGER_RATE: float = 0.12           # Was 0.4 — agents no longer starve in 2 minutes
+ENERGY_RATE: float = 0.08           # Was 0.25
+SOCIAL_RATE: float = 0.05           # Was 0.08
+THIRST_RATE: float = 0.10           # Was 0.35 — was the #1 killer
+COMFORT_RATE: float = 0.03          # Was 0.05
+HEALTH_REGEN_RATE: float = 0.2      # Was 0.1 — faster recovery
 
 # --- Environment ---
 DAY_LENGTH_TICKS: int = 2400
