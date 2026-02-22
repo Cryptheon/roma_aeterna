@@ -90,13 +90,15 @@ Requests are offloaded to an asynchronous `LLMWorker` thread. This worker mainta
     pip install -r requirements.txt
     ```
 
-4.  **Start vLLM (Optional but Recommended)**
+4.  **Start vLLM**
     If you want the agents to have actual AI intelligence, run a local LLM server:
     ```bash
-    python -m venv vllm_env
-    source vllm_env/bin/activate
-    pip install vllm
-    python -m vllm.entrypoints.api_server --model mistralai/Mistral-7B-Instruct-v0.2 --port 8000
+    vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 \
+      --download-dir "/path/to/your/models" \
+      --port 8000 \
+      --max-model-len 4096 \
+      --gpu-memory-utilization 0.9 \
+      --max-num-seqs 16 
     ```
 
 ---
