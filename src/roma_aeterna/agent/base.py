@@ -1,17 +1,14 @@
 """
 Agent — The autonomous citizen of Rome.
 
-Movement is tile-based and direct (no pathfinding). The agent sees a text
-description of its surroundings and decides what to do via the LLM.
-The LLM returns a structured action which the engine validates and executes.
+Dual-brain architecture:
+  - System 1 (Autopilot): Handles routine decisions — flee fire, eat when
+    starving, follow paths, basic greetings. Fast, no LLM needed.
+  - System 2 (LLM): Handles novel situations — first meetings, conflicting
+    goals, complex reasoning. Slow but creative.
 
-Design: The agent has NO external threat injection. Its urgency to act
-comes entirely from:
-  1. Biological drives (hunger, thirst, energy, social, comfort)
-  2. Health level
-  3. Status effects (each carrying an urgency_weight)
-The agent perceives the world through text and feels danger through
-its own body — just like a real person.
+The LIF neuron determines WHEN to think. The autopilot determines IF the
+LLM is even needed. If the autopilot handles it, the LLM is never called.
 """
 
 import uuid
@@ -20,6 +17,7 @@ from typing import List, Dict, Optional, Tuple, Any
 
 from .memory import Memory
 from .neuro import LeakyIntegrateAndFire, LIFParameters
+from .autopilot import Autopilot
 from .status_effects import StatusEffectManager, create_effect
 from roma_aeterna.config import (
     PERCEPTION_RADIUS, INTERACTION_RADIUS, MAX_INVENTORY_SIZE,
@@ -28,23 +26,12 @@ from roma_aeterna.config import (
 )
 
 
-# ============================================================
-# Action types the LLM can return
-# ============================================================
-
 VALID_ACTIONS = {
-    "MOVE",         # Move to adjacent tile: target = direction string
-    "TALK",         # Speak to nearby agent: target = agent name, content = what to say
-    "INTERACT",     # Use a building/object: target = object name
-    "PICK_UP",      # Pick up an item from the ground or container
-    "DROP",         # Drop an item from inventory
-    "CONSUME",      # Eat food, drink water, use medicine
-    "CRAFT",        # Craft at a station
-    "TRADE",        # Trade with another agent
-    "REST",         # Do nothing but recover energy
-    "SLEEP",        # Deep rest (requires shelter)
-    "INSPECT",      # Look more carefully at something
-    "IDLE",         # Wander thoughts, do nothing
+    "MOVE", "TALK", "INTERACT", "PICK_UP", "DROP", "CONSUME",
+    "CRAFT", "TRADE", "REST", "SLEEP", "INSPECT", "IDLE",
+    "GOTO",     # Multi-step navigation to a named location
+    "BUY",      # Purchase from a market
+    "WORK",     # Perform role duties at a building
 }
 
 DIRECTION_DELTAS: Dict[str, Tuple[int, int]] = {
@@ -75,7 +62,6 @@ class Agent:
         self.denarii: int = 20
 
         # --- Biological Drives ---
-        # 0 = fully satisfied, 100 = desperate
         self.drives: Dict[str, float] = {
             "hunger":  10.0,
             "thirst":  10.0,
@@ -91,6 +77,7 @@ class Agent:
         self.brain = LeakyIntegrateAndFire(
             LIFParameters(decay_rate=0.5, threshold=50.0, refractory_period=5.0)
         )
+        self.autopilot = Autopilot()
         self.current_time: float = 0.0
 
         # --- State ---
@@ -102,7 +89,13 @@ class Agent:
         self.movement_cooldown: int = 0
         self.interaction_cooldown: int = 0
 
-        # --- Personality (from prompt system) ---
+        # --- Conversation System ---
+        # When someone speaks to this agent, the message is queued here.
+        # Next time the brain fires (or autopilot checks), this triggers
+        # an LLM call to generate a response.
+        self._pending_conversation: Optional[Dict[str, str]] = None
+
+        # --- Personality ---
         self.personality_seed: Dict[str, Any] = personality_seed or {}
         self.personal_goals: List[str] = []
         self.fears: List[str] = []
@@ -112,7 +105,6 @@ class Agent:
         self.memory = Memory()
         self.status_effects = StatusEffectManager()
 
-        # --- Common knowledge ---
         self._init_common_knowledge()
 
     def _init_common_knowledge(self) -> None:
@@ -126,55 +118,81 @@ class Agent:
         self.memory.add_belief("fountains", "provide clean drinking water", 0.9, "common knowledge")
 
     # ================================================================
-    # PERCEPTION — Generate text description of surroundings
+    # CONVERSATION — Incoming speech triggers responses
+    # ================================================================
+
+    def receive_speech(self, speaker_name: str, message: str, tick: int) -> None:
+        """Called when another agent speaks to this agent.
+
+        Queues a pending conversation that will be processed on the next
+        brain fire or autopilot cycle. This creates actual back-and-forth.
+        """
+        self._pending_conversation = {
+            "speaker": speaker_name,
+            "message": message,
+            "tick": tick,
+        }
+
+        # Record in memory
+        self.memory.add_event(
+            f"{speaker_name} said to you: \"{message}\"",
+            tick=tick, importance=2.5, memory_type="conversation",
+            related_agent=speaker_name,
+        )
+        self.memory.record_conversation(speaker_name, they_said=message)
+
+        # Update relationship
+        self.memory.update_relationship(speaker_name, trust_delta=1.0, tick=tick,
+                                        note=f"Said: {message[:50]}")
+
+        # Social need reduction
+        self.drives["social"] = max(0, self.drives["social"] - 5)
+
+        # Force the brain to fire soon (someone is talking to us!)
+        self.brain.potential += 30.0
+
+    def has_pending_conversation(self) -> bool:
+        return self._pending_conversation is not None
+
+    def consume_pending_conversation(self) -> Optional[Dict[str, str]]:
+        """Retrieve and clear the pending conversation."""
+        convo = self._pending_conversation
+        self._pending_conversation = None
+        return convo
+
+    # ================================================================
+    # PERCEPTION
     # ================================================================
 
     def perceive(self, world: Any, agents: List["Agent"],
                  radius: Optional[int] = None) -> str:
-        """Build a natural-language description of what the agent sees.
-
-        This covers EXTERNAL perception only: buildings, items, people,
-        environment, terrain. Internal state (health, drives, status effects)
-        is handled separately in the prompt's STATUS section (see prompts.py).
-        """
+        """Build a natural-language description of what the agent sees."""
         radius = radius or PERCEPTION_RADIUS
-
-        # Status effects can reduce perception
         radius_mod = int(self.status_effects.get_modifier("perception_radius", 0))
         effective_radius = max(2, radius + radius_mod)
 
         sections: List[str] = []
 
-        # NOTE: Self-assessment (how the agent feels) is handled in the
-        # STATUS section of the prompt (see prompts.py). Perception only
-        # covers what the agent SEES, not what it feels internally.
-
-        # 1. Immediate tile
         tile_desc = self._describe_current_tile(world)
         if tile_desc:
             sections.append(f"YOU ARE STANDING ON: {tile_desc}")
 
-        # 2. Terrain and buildings
         buildings = self._scan_buildings(world, effective_radius)
         if buildings:
             sections.append("STRUCTURES NEARBY:\n" + "\n".join(buildings))
 
-        # 3. Items on the ground
         ground_items = self._scan_ground_items(world, effective_radius)
         if ground_items:
             sections.append("ITEMS ON THE GROUND:\n" + "\n".join(ground_items))
 
-        # 4. Other agents
         nearby_agents = self._scan_agents(agents, effective_radius)
         if nearby_agents:
             sections.append("PEOPLE NEARBY:\n" + "\n".join(nearby_agents))
 
-        # 5. Environmental conditions
         env = self._describe_environment(world)
         if env:
             sections.append("ENVIRONMENT:\n" + env)
 
-        # 6. Passable directions
         directions = self._scan_directions(world)
         if directions:
             sections.append("PASSABLE DIRECTIONS: " + ", ".join(directions))
@@ -185,7 +203,6 @@ class Agent:
         return "\n\n".join(sections)
 
     def _scan_buildings(self, world: Any, radius: int) -> List[str]:
-        """Scan for buildings/objects within perception radius."""
         results: List[str] = []
         seen_names: set = set()
 
@@ -232,13 +249,11 @@ class Agent:
                 results.append(
                     f"- {bld.name}{mod_str}: {dist:.0f}m to the {direction}"
                 )
-
                 self.memory.learn_location(bld.name, (tx, ty))
 
         return results
 
     def _scan_ground_items(self, world: Any, radius: int) -> List[str]:
-        """Scan for items dropped on tiles."""
         results: List[str] = []
         min_x = max(0, int(self.x) - radius)
         max_x = min(world.width, int(self.x) + radius)
@@ -257,7 +272,6 @@ class Agent:
         return results
 
     def _scan_agents(self, agents: List["Agent"], radius: int) -> List[str]:
-        """Scan for other agents within perception radius."""
         results: List[str] = []
         for other in agents:
             if other.uid == self.uid or not other.is_alive:
@@ -275,7 +289,6 @@ class Agent:
             if other.last_speech and dist < INTERACTION_RADIUS * 2:
                 speech = f', saying: "{other.last_speech}"'
 
-            # Observable distress
             distress = ""
             if other.health < 30:
                 distress = ", looks badly injured"
@@ -289,18 +302,14 @@ class Agent:
         return results
 
     def _describe_environment(self, world: Any) -> str:
-        """Describe weather and time of day."""
         parts: List[str] = []
-
         weather = getattr(world, "_current_weather_desc", None)
         if weather:
             parts.append(weather)
-
         time_of_day = getattr(world, "_current_time_desc", None)
         if time_of_day:
             parts.append(time_of_day)
 
-        # Tile-level environmental hazards
         tile = world.get_tile(int(self.x), int(self.y))
         if tile:
             effects = getattr(tile, "effects", [])
@@ -312,7 +321,6 @@ class Agent:
         return " ".join(parts) if parts else ""
 
     def _describe_current_tile(self, world: Any) -> str:
-        """Describe the tile the agent is currently on."""
         tile = world.get_tile(int(self.x), int(self.y))
         if not tile:
             return "unknown terrain"
@@ -329,14 +337,11 @@ class Agent:
             "mountain": "rocky rubble",
         }
         desc = terrain_names.get(tile.terrain_type, tile.terrain_type)
-
         if tile.building:
             desc += f" (inside/near {tile.building.name})"
-
         return desc
 
     def _scan_directions(self, world: Any) -> List[str]:
-        """Check which cardinal directions are passable from current position."""
         passable: List[str] = []
         for direction, (dx, dy) in DIRECTION_DELTAS.items():
             nx, ny = int(self.x) + dx, int(self.y) + dy
@@ -346,7 +351,6 @@ class Agent:
         return passable
 
     def _get_direction(self, tx: float, ty: float) -> str:
-        """Compute cardinal/ordinal direction from self to target."""
         dx, dy = tx - self.x, ty - self.y
         if dx == 0 and dy == 0:
             return "here"
@@ -381,7 +385,6 @@ class Agent:
         if not tile.is_walkable:
             return False, f"The way {direction} is blocked ({tile.terrain_type})."
 
-        speed_mod = self.status_effects.get_modifier("speed", 0.0)
         base_cost = max(1, int(tile.movement_cost))
         self.movement_cooldown = base_cost
 
@@ -397,7 +400,6 @@ class Agent:
     # ================================================================
 
     def interact_with_object(self, obj_name: str, world: Any) -> Tuple[bool, str]:
-        """Interact with a named world object within range."""
         from roma_aeterna.world.components import (
             Interactable, WaterFeature, Container, CraftingStation,
             Shelter, InfoSource, Liquid,
@@ -447,7 +449,6 @@ class Agent:
         return True, result
 
     def _execute_interaction(self, target: Any, interact: Any) -> str:
-        """Run the specific interaction logic."""
         itype = interact.interaction_type
 
         if itype == "pray":
@@ -457,7 +458,6 @@ class Agent:
             if effect:
                 self.status_effects.add(effect)
             return f"You pray at {target.name}. A sense of peace washes over you."
-
         elif itype == "drink":
             from roma_aeterna.world.components import Liquid
             liquid = target.get_component(Liquid)
@@ -469,38 +469,30 @@ class Agent:
                     self.status_effects.add(effect)
                 return f"You drink fresh water from {target.name}. Refreshing!"
             return f"{target.name} is dry."
-
         elif itype == "rest":
             self.drives["energy"] = max(0, self.drives["energy"] - 20)
             self.drives["comfort"] = max(0, self.drives["comfort"] - 10)
             return f"You rest at {target.name}. Your body relaxes."
-
         elif itype == "trade":
             return f"You browse the wares at {target.name}."
-
         elif itype == "spectate":
             self.drives["social"] = max(0, self.drives["social"] - 15)
             self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
             return f"You watch the spectacle at {target.name}. The crowd roars!"
-
         elif itype == "train":
             self.drives["energy"] += 15
             effect = create_effect("exercised")
             if effect:
                 self.status_effects.add(effect)
             return f"You train at {target.name}. Your muscles burn but you feel stronger."
-
         elif itype == "speak":
             self.drives["social"] = max(0, self.drives["social"] - 20)
             return f"You address the crowd from {target.name}."
-
         elif itype == "deliberate":
             self.drives["social"] = max(0, self.drives["social"] - 10)
             return f"You participate in deliberation at {target.name}."
-
         elif itype == "audience":
             return f"You seek an audience at {target.name}."
-
         elif itype == "inspect":
             return f"You carefully inspect {target.name}."
 
@@ -508,7 +500,7 @@ class Agent:
 
     def talk_to(self, target_name: str, message: str, agents: List["Agent"],
                 tick: int) -> Tuple[bool, str]:
-        """Speak to a nearby agent."""
+        """Speak to a nearby agent. Triggers their conversation response."""
         target = None
         for other in agents:
             if other.name.lower() == target_name.lower() and other.uid != self.uid:
@@ -520,29 +512,33 @@ class Agent:
         if target is None:
             return False, f"{target_name} is not nearby."
 
+        # Record in speaker's memory
         self.last_speech = message
         self.memory.add_event(
             f"You said to {target.name}: \"{message}\"",
             tick=tick, importance=2.0, memory_type="conversation",
             related_agent=target.name,
         )
-        target.memory.add_event(
-            f"{self.name} said to you: \"{message}\"",
-            tick=tick, importance=2.5, memory_type="conversation",
-            related_agent=self.name,
-        )
-
+        self.memory.record_conversation(target.name, i_said=message)
         self.memory.update_relationship(target.name, trust_delta=1.0, tick=tick)
-        target.memory.update_relationship(self.name, trust_delta=1.0, tick=tick,
-                                          note=f"Said: {message[:50]}")
-
         self.drives["social"] = max(0, self.drives["social"] - 10)
-        target.drives["social"] = max(0, target.drives["social"] - 5)
+
+        # Deliver to listener — this queues their response
+        target.receive_speech(self.name, message, tick)
+
+        # Share gossip during conversation
+        gossip = self.memory.get_gossip_for_conversation()
+        if gossip and target.name not in gossip.text:
+            target.memory.add_event(
+                f"{self.name} told you: \"{gossip.text}\"",
+                tick=tick, importance=gossip.importance * 0.7,
+                memory_type="conversation", related_agent=self.name,
+                tags=["gossip"],
+            )
 
         return True, f"You speak to {target.name}."
 
     def consume_item(self, item_name: str) -> Tuple[bool, str]:
-        """Eat, drink, or use an item from inventory."""
         target_item = None
         for item in self.inventory:
             if item.name.lower() == item_name.lower():
@@ -564,6 +560,7 @@ class Agent:
                 tick=int(self.current_time), importance=4.0,
                 tags=["negative", "food"],
             )
+            # Strong negative preference — remember this!
             self.memory.update_preference(target_item.name, -0.5)
             return True, f"The {target_item.name} was rotten! You feel terrible."
 
@@ -598,6 +595,7 @@ class Agent:
                     self.status_effects.add(effect)
 
             self.inventory.remove(target_item)
+            # Positive preference for good food
             self.memory.update_preference(target_item.name, 0.3)
             desc = " and ".join(results) if results else "unremarkable"
             return True, f"You consume the {target_item.name}. It is {desc}."
@@ -605,7 +603,6 @@ class Agent:
         return False, f"You can't consume {target_item.name}."
 
     def pick_up_item(self, item_name: str, world: Any) -> Tuple[bool, str]:
-        """Pick up an item from the ground at current tile."""
         if len(self.inventory) >= MAX_INVENTORY_SIZE:
             return False, "Your inventory is full."
 
@@ -623,7 +620,6 @@ class Agent:
         return False, f"No '{item_name}' here on the ground."
 
     def drop_item(self, item_name: str, world: Any) -> Tuple[bool, str]:
-        """Drop an item from inventory onto the current tile."""
         for item in self.inventory:
             if item.name.lower() == item_name.lower():
                 self.inventory.remove(item)
@@ -636,63 +632,50 @@ class Agent:
         return False, f"You don't have '{item_name}'."
 
     # ================================================================
-    # BIOLOGY — Drives, health, metabolism, urgency
+    # BIOLOGY
     # ================================================================
 
     def update_biological(self, dt: float, weather_fx: Dict) -> bool:
-        """Update drives, health, status effects. Returns True if brain fires.
-
-        No external threat injection. Urgency emerges from:
-          - Biological drives (quadratic scaling at extremes)
-          - Health level (low health = high urgency)
-          - Status effects (each carries its own urgency_weight)
-          - Boredom baseline
-        """
+        """Update drives, health, status effects. Returns True if brain fires."""
         self.current_time += dt
 
         if not self.is_alive:
             return False
 
-        # Tick status effects
         self.status_effects.tick()
 
-        # Tick cooldowns
         if self.movement_cooldown > 0:
             self.movement_cooldown -= 1
         if self.interaction_cooldown > 0:
             self.interaction_cooldown -= 1
 
-        # --- Metabolic Rates (modified by status effects) ---
+        # Metabolic rates
         hunger_mult = self.status_effects.get_modifier("hunger_rate", 1.0)
         energy_mult = self.status_effects.get_modifier("energy_rate", 1.0)
         thirst_mult = self.status_effects.get_modifier("thirst_rate", 1.0)
         comfort_mult = self.status_effects.get_modifier("comfort_rate", 1.0)
 
-        # Environmental modifiers from weather
         if "heatwave" in weather_fx or weather_fx.get("thirst", 0) > 0:
             thirst_mult *= 1.8
             energy_mult *= 1.3
         if "energy_drain" in weather_fx:
             energy_mult *= weather_fx["energy_drain"]
 
-        # Activity modifiers
         if self.action == "MOVING":
             hunger_mult *= 1.5
             energy_mult *= 1.5
             thirst_mult *= 1.3
 
-        # Drive decay
         self.drives["hunger"] += HUNGER_RATE * hunger_mult * dt
         self.drives["thirst"] += THIRST_RATE * thirst_mult * dt
         self.drives["energy"] += ENERGY_RATE * energy_mult * dt
         self.drives["social"] += SOCIAL_RATE * dt
         self.drives["comfort"] += COMFORT_RATE * comfort_mult * dt
 
-        # Clamp
         for k in self.drives:
             self.drives[k] = min(100.0, max(0.0, self.drives[k]))
 
-        # --- Health ---
+        # Health
         regen = HEALTH_REGEN_RATE + self.status_effects.get_modifier("health_regen", 0.0)
         if self.drives["hunger"] > 90:
             self.health -= 0.5 * dt
@@ -706,64 +689,44 @@ class Agent:
             self.action = "DEAD"
             return False
 
-        # --- Brain: Compute urgency entirely from internal state ---
         input_current = self._compute_urgency()
         return self.brain.update(dt, input_current, self.current_time)
 
     def _compute_urgency(self) -> float:
-        """Calculate total urgency input for the LIF neuron.
-
-        All urgency comes from the agent's OWN state:
-          1. Homeostatic pressure from drives (quadratic for exponential urgency)
-          2. Status effect urgency weights (burned=18, smoke=10, wet=2, etc.)
-          3. Low health
-          4. Boredom baseline
-
-        No external threat scores. The agent feels danger through its body.
-        """
         urgency = 0.0
 
-        # --- 1. Homeostatic pressure (quadratic at extremes) ---
         drive_weights = {
-            "hunger": 10.0,
-            "thirst": 12.0,
-            "energy": 5.0,
-            "social": 2.0,
-            "comfort": 1.5,
+            "hunger": 10.0, "thirst": 12.0, "energy": 5.0,
+            "social": 2.0, "comfort": 1.5,
         }
         for drive_name, drive_val in self.drives.items():
             ratio = drive_val / 100.0
             weight = drive_weights.get(drive_name, 1.0)
             urgency += (ratio ** 2) * weight
 
-        # --- 2. Status effect urgency (the key change) ---
-        # Each effect carries its own urgency_weight:
-        #   Burned=18, Smoke Inhalation=10, Food Poisoning=14, etc.
-        # This replaces the old `visible_threats * 30.0` and
-        # `len(negative_effects) * 5.0` with nuanced per-effect urgency.
         urgency += self.status_effects.get_total_urgency()
 
-        # --- 3. Low health ---
         if self.health < self.max_health:
             health_ratio = 1.0 - (self.health / self.max_health)
-            # Exponential urgency as health drops
             urgency += (health_ratio ** 1.5) * 20.0
 
-        # --- 4. Boredom baseline ---
-        urgency += 1.0
+        # Pending conversation adds urgency (someone is talking to us!)
+        if self._pending_conversation:
+            urgency += 25.0
 
+        urgency += 1.0
         return urgency
 
     # ================================================================
-    # INSPECTION DATA — For GUI tooltip
+    # INSPECTION DATA
     # ================================================================
 
     def get_inspection_data(self) -> List[str]:
-        """Return tooltip data for the GUI hover system."""
         lines = [
             f"Name: {self.name}",
             f"Role: {self.role}",
             f"Health: {int(self.health)}/{int(self.max_health)}",
+            f"Denarii: {self.denarii}",
             f"--- Drives ---",
             f"Hunger: {int(self.drives['hunger'])}%",
             f"Thirst: {int(self.drives['thirst'])}%",
@@ -773,6 +736,7 @@ class Agent:
             f"--- Mind ---",
             f"Urgency: {int(self.brain.potential)}/{int(self.brain.params.threshold)}",
             f"Action: {self.action}",
+            f"Autopilot: {self.autopilot.state.value}",
             f"Thought: {self.current_thought[:40]}...",
         ]
         effects = [e.name for e in self.status_effects.active]
@@ -781,22 +745,22 @@ class Agent:
         inv_names = [i.name for i in self.inventory[:5]]
         if inv_names:
             lines.append(f"Carrying: {', '.join(inv_names)}")
+        if self.autopilot.path:
+            lines.append(f"Path: {self.autopilot.destination_name} ({len(self.autopilot.path)} steps)")
         return lines
 
     def get_inventory_summary(self) -> str:
-        """Text summary for LLM context."""
         if not self.inventory:
             return "You are carrying nothing."
         items_desc = []
         for item in self.inventory:
             freshness = ""
-            if item.spoilable and item.freshness < 0.5:
+            if getattr(item, "spoilable", False) and getattr(item, "freshness", 1.0) < 0.5:
                 freshness = " (going stale)"
             items_desc.append(f"- {item.name}{freshness}")
         return f"You carry ({len(self.inventory)}/{MAX_INVENTORY_SIZE}):\n" + "\n".join(items_desc)
 
     def get_drives_summary(self) -> str:
-        """Text summary of needs for LLM context."""
         labels = {
             "hunger": ["satisfied", "peckish", "hungry", "starving"],
             "thirst": ["hydrated", "thirsty", "parched", "desperately thirsty"],
