@@ -186,8 +186,18 @@ class LLMWorker(threading.Thread):
                 max_tokens=LLM_MAX_TOKENS,
             )
             content = response.choices[0].message.content
-            return self._parse_json(content)
+            parsed = self._parse_json(content)
+            
+            # Log the raw response for diagnostics
+            if parsed:
+                agent.record_llm_response(content, parsed)
+            else:
+                agent.record_llm_response(content, None, error="JSON parse failed")
+                print(f"[LLM] Parse failed for {agent.name}. Raw: {content[:150]}")
+            
+            return parsed
         except Exception as e:
+            agent.record_llm_response("", None, error=str(e))
             print(f"[LLM] Inference error: {e}")
 
         return await self._mock_decision(agent)
@@ -521,8 +531,17 @@ class LLMWorker(threading.Thread):
 
     @staticmethod
     def _parse_json(text: str) -> Optional[Dict]:
-        # Strip common markdown wrappers
+        if not text:
+            return None
+            
         text = text.strip()
+        
+        # Qwen3 often wraps output in <think>...</think> tags
+        # Strip those first
+        import re
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        
+        # Strip common markdown wrappers
         if text.startswith("```json"):
             text = text[7:]
         if text.startswith("```"):
@@ -531,17 +550,30 @@ class LLMWorker(threading.Thread):
             text = text[:-3]
         text = text.strip()
 
+        # Try direct parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
             
-        # Fallback to the curly brace extractor
+        # Fallback: extract first JSON object from the text
+        # This handles cases where the model adds explanation before/after
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
+            candidate = text[start:end]
             try:
-                return json.loads(text[start:end])
+                return json.loads(candidate)
             except json.JSONDecodeError:
                 pass
+            
+            # Try fixing common issues: trailing commas, single quotes
+            try:
+                # Remove trailing commas before closing braces
+                fixed = re.sub(r',\s*}', '}', candidate)
+                fixed = re.sub(r',\s*]', ']', fixed)
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                pass
+
         return None
