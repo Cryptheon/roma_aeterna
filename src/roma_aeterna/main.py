@@ -1,39 +1,92 @@
-import threading
-from .core.logger import SimLogger
-from .world.generator import WorldGenerator
-from .engine.loop import SimulationEngine
-from .gui.renderer import Renderer
-from .agent.base import Agent
+"""
+Rome: Aeterna — Entry Point
+
+Starts the simulation engine, loads any existing save, and runs the
+renderer loop. On exit (ESC or window close), saves the game state.
+"""
+
+import sys
+from roma_aeterna.world.generator import WorldGenerator
+from roma_aeterna.agent.base import Agent
+from roma_aeterna.engine.loop import SimulationEngine
+from roma_aeterna.gui.renderer import Renderer
+from roma_aeterna.core.persistence import has_save, delete_save
+
+
+def create_agents():
+    """Spawn initial population in historically appropriate locations."""
+    agents = [
+        # Forum Romanum area
+        Agent("Marcus Aurelius", "Senator", 70, 60),
+        Agent("Gaius Petronius", "Merchant", 82, 62),
+        Agent("Lucius Verus", "Senator", 75, 58),
+
+        # Near the Colosseum
+        Agent("Spartacus", "Gladiator", 148, 96),
+        Agent("Maximus", "Gladiator", 150, 98),
+        Agent("Quintus", "Guard (Legionary)", 140, 90),
+
+        # Subura district
+        Agent("Publius", "Plebeian", 65, 35),
+        Agent("Claudia", "Merchant", 78, 40),
+        Agent("Servius", "Craftsman", 85, 32),
+
+        # Palatine Hill
+        Agent("Cornelia", "Patrician", 50, 88),
+        Agent("Tiberius", "Guard (Legionary)", 55, 85),
+
+        # Esquiline
+        Agent("Flavia", "Priest", 135, 30),
+        Agent("Decimus", "Merchant", 145, 42),
+    ]
+    return agents
+
 
 def main():
-    # 1. Init Logging
-    logger = SimLogger()
-    logger.log_event("SYSTEM", "Initializing Rome: Aeterna...")
+    print("=" * 50)
+    print("  ROME: AETERNA — Forum Romanum District")
+    print("  c. 161 AD, Reign of Marcus Aurelius")
+    print("=" * 50)
+    print()
 
-    # 2. Generate World
-    rome_map = WorldGenerator.generate_rome()
-    logger.log_event("WORLD", f"Map Generated: {rome_map.width}x{rome_map.height}")
+    # Check for --new-game flag
+    new_game = "--new-game" in sys.argv
+    if new_game and has_save():
+        print("  --new-game flag detected. Deleting existing save.")
+        delete_save()
 
-    # 3. Create Agents
-    agents = []
-    # Place Marcus in the center (Forum)
-    cx, cy = rome_map.width // 2, rome_map.height // 2
-    
-    marcus = Agent("Marcus Aurelius", "Senator", cx, cy)
-    marcus.inventory.append("Stylus")
-    agents.append(marcus)
+    if has_save() and not new_game:
+        print("  Save file found. Will resume previous session.")
+    else:
+        print("  Starting new simulation.")
 
-    # Place Plebeians
-    for i in range(5):
-        agents.append(Agent(f"Plebeian {i+1}", "Plebeian", cx + i + 2, cy + 2))
+    print()
+    print("Generating world...")
 
-    # 4. Initialize Simulation Engine
-    engine = SimulationEngine(rome_map, agents)
+    world = WorldGenerator.generate_rome()
 
-    # 5. Start GUI (Main Thread)
-    # The Renderer will tick the engine to keep visuals synced with logic
+    print(f"  Map: {world.width}x{world.height} tiles")
+    print(f"  Objects: {len(world.objects)}")
+    print(f"  Landmarks: {list(world.landmarks.keys())}")
+
+    agents = create_agents()
+    print(f"  Citizens: {len(agents)}")
+
+    print()
+    print("Starting simulation...")
+    print("Controls: WASD=Pan, Scroll=Zoom, Hover=Inspect, ESC=Quit")
+    print()
+
+    engine = SimulationEngine(world, agents)
     renderer = Renderer(engine)
-    renderer.run()
+
+    try:
+        renderer.run()
+    except KeyboardInterrupt:
+        print("\n[MAIN] Interrupted.")
+    finally:
+        engine.shutdown()
+
 
 if __name__ == "__main__":
     main()
