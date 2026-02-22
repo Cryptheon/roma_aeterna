@@ -32,8 +32,8 @@ class LLMWorker(threading.Thread):
         self.lock = threading.Lock()
         self.daemon = True
         self.batch_size: int = 10
-        self.use_mock: bool = True
-
+        self.use_mock: bool = False
+        
     def queue_request(self, agent: Any) -> None:
         with self.lock:
             if agent not in self.input_queue:
@@ -177,6 +177,7 @@ class LLMWorker(threading.Thread):
             agent, self.engine.world,
             self.engine.agents, self.engine.weather,
         )
+        agent.record_prompt(prompt)
         try:
             response = await client.chat.completions.create(
                 model=VLLM_MODEL,
@@ -305,6 +306,10 @@ class LLMWorker(threading.Thread):
     def _apply_decision(self, agent: Any, decision: Dict) -> None:
         """Validate and execute the agent's decision."""
         with self.engine.lock:
+            # Record this decision in the agent's history
+            source = "autopilot" if decision.get("_autopilot") else "llm"
+            agent.record_decision(decision, source=source)
+
             thought = decision.get("thought", "...")
             action = decision.get("action", "IDLE").upper()
             agent.current_thought = thought
