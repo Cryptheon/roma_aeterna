@@ -31,3 +31,6 @@ roma-aeterna = "roma_aeterna.main:main"
 
 [project.urls]
 "Homepage" = "https://github.com/your-username/rome-aeterna"
+
+[tool.setuptools.packages.find]
+where = ["src"]
