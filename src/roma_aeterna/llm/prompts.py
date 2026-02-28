@@ -184,6 +184,15 @@ YOUR PREFERENCES (Likes/Dislikes):
 DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
 {decision_history}"""
 
+INCOMING_MESSAGE_TEMPLATE = """SOMEONE JUST SPOKE TO YOU:
+{speaker} said: "{message}"
+
+Your relationship with them: {relationship}
+Recent conversation history:
+{convo_history}
+
+You may respond with TALK, continue what you were doing, walk away, or do anything else. This is entirely your choice."""
+
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
 Consider how you feel, what you see, your memories, and your personality.
 {urgency_hint}
@@ -317,8 +326,21 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str
         decision_history=decision_history_text,
     )
 
-    full_prompt = "\n\n".join([system, status, perception, memory, decision_history, action])
-    return full_prompt
+    # Incoming speech — surfaced as explicit context so the agent can
+    # freely decide whether to respond, ignore, or do something else.
+    sections = [system, status, perception, memory, decision_history]
+    pending = agent._pending_conversation
+    if pending:
+        incoming = INCOMING_MESSAGE_TEMPLATE.format(
+            speaker=pending["speaker"],
+            message=pending["message"],
+            relationship=_get_relationship_desc(agent, pending["speaker"]),
+            convo_history=agent.memory.get_conversation_context(pending["speaker"]),
+        )
+        sections.append(incoming)
+
+    sections.append(action)
+    return "\n\n".join(sections)
 
 def _build_urgency_hint(agent: Any) -> str:
     hints: List[str] = []
@@ -340,37 +362,6 @@ def _build_urgency_hint(agent: Any) -> str:
     if not hints:
         return ""
     return "\n" + "\n".join(hints) + "\n"
-
-def build_conversation_prompt(agent: Any, speaker_name: str, speech: str) -> str:
-    """Build a prompt for generating a response to being spoken to, using context history."""
-    persona = agent.personality_seed
-
-    state_note = ""
-    if agent.health < 50:
-        state_note = "\nNote: You are injured and in pain. This affects how you respond."
-    sensation = agent.status_effects.get_sensation_summary()
-    if sensation:
-        state_note += f"\nYou currently feel: {sensation}"
-
-    # Injecting the conversation back-and-forth history
-    convo_context = agent.memory.get_conversation_context(speaker_name)
-
-    return f"""You are {agent.name}, a {agent.role} in Ancient Rome (161 AD).
-Personality: {persona.get('speech_style', 'speaks normally')}
-{state_note}
-
-Your relationship with {speaker_name}: {_get_relationship_desc(agent, speaker_name)}
-Recent conversation history with them: 
-{convo_context}
-
-{speaker_name} just said to you: "{speech}"
-
-Respond ONLY with JSON:
-{{
-    "thought": "your inner reaction (1 sentence)",
-    "speech": "what you say back (keep it natural and in-character, 1-3 sentences)",
-    "attitude": "friendly/neutral/hostile/suspicious"
-}}"""
 
 def _get_relationship_desc(agent: Any, name: str) -> str:
     rel = agent.memory.relationships.get(name)

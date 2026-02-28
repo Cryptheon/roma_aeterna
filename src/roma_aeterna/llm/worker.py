@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, List
 from openai import AsyncOpenAI
 
 from roma_aeterna.config import VLLM_URL, VLLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
-from .prompts import build_prompt, build_conversation_prompt
+from .prompts import build_prompt
 
 
 class LLMWorker(threading.Thread):
@@ -64,104 +64,23 @@ class LLMWorker(threading.Thread):
             await asyncio.gather(*tasks)
 
     async def _process_agent(self, client: Any, agent: Any) -> None:
+        """Run a single unified decision cycle.
+
+        Incoming speech (if any) is surfaced as context inside the regular
+        prompt — the agent freely decides whether to reply, ignore, or do
+        something else entirely.
+        """
         try:
-            # Check for pending conversation first
-            convo = agent.consume_pending_conversation()
-
-            if convo:
-                decision = await self._handle_conversation(
-                    client, agent, convo
-                )
-            else:
-                decision = await self._handle_decision(client, agent)
-
+            decision = await self._handle_decision(client, agent)
             if decision:
                 self._apply_decision(agent, decision)
         except Exception as e:
             print(f"[LLM] Error for {agent.name}: {e}")
         finally:
+            # Conversation context consumed — clear it regardless of what
+            # the agent decided to do.
+            agent._pending_conversation = None
             agent.waiting_for_llm = False
-
-    # ================================================================
-    # CONVERSATION HANDLING
-    # ================================================================
-
-    async def _handle_conversation(self, client: Any, agent: Any,
-                                   convo: Dict) -> Optional[Dict]:
-        """Generate a response to someone speaking to the agent."""
-        speaker = convo["speaker"]
-        message = convo["message"]
-
-        if self.use_mock:
-            return await self._mock_conversation_response(agent, speaker, message)
-
-        prompt = build_conversation_prompt(agent, speaker, message)
-        try:
-            response = await client.chat.completions.create(
-                model=VLLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=LLM_TEMPERATURE,
-                max_tokens=LLM_MAX_TOKENS,
-            )
-            content = response.choices[0].message.content
-            parsed = self._parse_json(content)
-            if parsed and "speech" in parsed:
-                return {
-                    "thought": parsed.get("thought", "..."),
-                    "action": "TALK",
-                    "target": speaker,
-                    "speech": parsed["speech"],
-                }
-        except Exception as e:
-            print(f"[LLM] Conversation inference error: {e}")
-
-        return await self._mock_conversation_response(agent, speaker, message)
-
-    async def _mock_conversation_response(self, agent: Any,
-                                           speaker: str,
-                                           message: str) -> Dict:
-        """Generate a mock conversational response."""
-        await asyncio.sleep(0.02)
-
-        rel = agent.memory.relationships.get(speaker)
-        trust = rel.trust if rel else 0
-
-        # Response varies by trust level and personality
-        persona = agent.personality_seed
-        style = persona.get("speech_style", "speaks normally")
-
-        if trust > 30:
-            responses = [
-                f"Good to see you, {speaker}! What's on your mind?",
-                f"Ah, {speaker}! Always a pleasure. Tell me more.",
-                f"I was hoping to run into you, {speaker}.",
-            ]
-        elif trust < -20:
-            responses = [
-                f"What do you want, {speaker}?",
-                f"Hmm. Make it quick, {speaker}.",
-                f"I have nothing to say to you.",
-            ]
-        else:
-            responses = [
-                f"Salve, {speaker}. What brings you here?",
-                f"Ave. I'm listening.",
-                f"Interesting. Go on.",
-                f"Indeed. The times are... eventful.",
-            ]
-
-        # Share gossip if we have some
-        gossip = agent.memory.get_gossip_for_conversation()
-        speech = random.choice(responses)
-        if gossip and random.random() < 0.4:
-            speech += f" By the way, did you hear? {gossip.text}"
-
-        return {
-            "thought": f"{speaker} is speaking to me. I should respond.",
-            "action": "TALK",
-            "target": speaker,
-            "speech": speech,
-        }
 
     # ================================================================
     # DECISION HANDLING

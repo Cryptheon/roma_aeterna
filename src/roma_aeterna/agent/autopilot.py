@@ -86,11 +86,6 @@ class Autopilot:
             self.ticks_on_autopilot = 0
             return None  # Let the LLM re-evaluate
 
-        # --- Pending conversation: always defer to LLM ---
-        if agent._pending_conversation:
-            self.ticks_on_autopilot = 0
-            return None
-
         # --- Priority 1: SURVIVAL (always handled by autopilot) ---
         survival = self._check_survival(agent, world)
         if survival:
