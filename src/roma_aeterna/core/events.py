@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 from enum import Enum
 import math
 
+from roma_aeterna.config import MAX_GOSSIP_HOPS, EVENT_HISTORY_CAP, GOSSIP_IMPORTANCE_DECAY
+
 
 class EventType(Enum):
     """Categories of events in the simulation."""
@@ -67,7 +69,7 @@ class Event:
     tick: int = 0                       # When it happened
     importance: float = 1.0             # For memory storage
     gossip_hops: int = 0                # How many times this has been retold
-    max_gossip_hops: int = 3            # Stops spreading after this
+    max_gossip_hops: int = MAX_GOSSIP_HOPS  # Stops spreading after this
     consumed_by: List[str] = field(default_factory=list)  # Agent UIDs who've seen it
 
 
@@ -78,7 +80,7 @@ class EventBus:
         self.pending: List[Event] = []
         self.history: List[Event] = []
         self._listeners: Dict[str, List[Callable]] = {}
-        self._history_cap: int = 200
+        self._history_cap: int = EVENT_HISTORY_CAP
 
     def emit(self, event: Event) -> None:
         """Queue an event for processing next tick."""
@@ -141,7 +143,7 @@ class EventBus:
         etype = event.event_type
 
         # Scale importance by gossip hops (secondhand info is less important)
-        importance = event.importance * (0.7 ** event.gossip_hops)
+        importance = event.importance * (GOSSIP_IMPORTANCE_DECAY ** event.gossip_hops)
 
         if etype == EventType.FIRE_STARTED.value:
             bld = event.data.get("building", "something")
@@ -222,16 +224,6 @@ class EventBus:
                 text, tick=event.tick, importance=importance,
                 memory_type="conversation", tags=["gossip"],
                 related_agent=source,
-            )
-
-        elif etype == EventType.WAGES_PAID.value:
-            amount = event.data.get("amount", 0)
-            source = event.data.get("employer", "your employer")
-            agent.denarii += amount
-            text = f"You received {amount} denarii from {source} for your work."
-            agent.memory.add_event(
-                text, tick=event.tick, importance=2.0,
-                memory_type="event", tags=["money", "work"],
             )
 
         elif etype == EventType.PUBLIC_ANNOUNCEMENT.value:

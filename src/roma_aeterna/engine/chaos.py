@@ -14,7 +14,11 @@ import math
 from typing import Any, List
 
 from roma_aeterna.world.components import Flammable, Structural, Liquid, WaterFeature
-from roma_aeterna.config import FIRE_SPREAD_BASE_CHANCE, RAIN_FIRE_SUPPRESSION
+from roma_aeterna.config import (
+    FIRE_SPREAD_BASE_CHANCE, RAIN_FIRE_SUPPRESSION,
+    FIRE_BURN_THRESHOLD, FIRE_SMOKE_THRESHOLD,
+    FIRE_INTENSITY_CAP, SMOKE_AGE_THRESHOLD,
+)
 
 
 class ChaosEngine:
@@ -22,6 +26,7 @@ class ChaosEngine:
 
     def __init__(self, world: Any) -> None:
         self.world = world
+        self._smoked_tiles: set = set()  # Tracks tiles with smoke for efficient decay
 
     # ================================================================
     # LEGACY ENTRY POINT (calls both phases)
@@ -90,13 +95,13 @@ class ChaosEngine:
             # (skips decorative fires like torches)
             fire_exposure = self._check_fire_proximity(agent)
 
-            if fire_exposure > 5.0:
+            if fire_exposure > FIRE_BURN_THRESHOLD:
                 if not agent.status_effects.has_effect("Burned"):
                     burned = create_effect("burned")
                     if burned:
                         agent.status_effects.add(burned)
-                agent.health -= min(5.0, fire_exposure * 0.5)
-            elif fire_exposure > 2.0:
+                agent.health -= min(FIRE_BURN_THRESHOLD, fire_exposure * 0.5)
+            elif fire_exposure > FIRE_SMOKE_THRESHOLD:
                 if not agent.status_effects.has_effect("Smoke Inhalation"):
                     smoke = create_effect("smoke_inhalation")
                     if smoke:
@@ -146,7 +151,7 @@ class ChaosEngine:
         # Burn fuel
         wind_mult = 1.0 + (weather.wind_speed * 0.15)
         flam.fuel -= flam.burn_rate * wind_mult
-        flam.fire_intensity = min(20.0, flam.fire_intensity + 0.5)
+        flam.fire_intensity = min(FIRE_INTENSITY_CAP, flam.fire_intensity + 0.5)
 
         # Damage structure
         struct = obj.get_component(Structural)
@@ -208,7 +213,8 @@ class ChaosEngine:
         smoke_radius = max(1, int(amount / 2))
         for dy in range(-smoke_radius, smoke_radius + 1):
             for dx in range(-smoke_radius, smoke_radius + 1):
-                tile = self.world.get_tile(obj.x + dx, obj.y + dy)
+                tx, ty = int(obj.x + dx), int(obj.y + dy)
+                tile = self.world.get_tile(tx, ty)
                 if tile:
                     effects = getattr(tile, "effects", [])
                     if "smoke" not in effects:
@@ -216,27 +222,29 @@ class ChaosEngine:
                     if not hasattr(tile, "_smoke_age"):
                         tile._smoke_age = 0
                     tile._smoke_age = 0
+                    self._smoked_tiles.add((tx, ty))
 
     def _decay_smoke(self) -> None:
         """Gradually clear smoke from tiles that aren't being refreshed.
-        
-        OPTIMIZATION: Only check tiles that actually have smoke tracked,
-        instead of iterating the entire 30,000-tile map.
+
+        Only iterates tiles known to have smoke (tracked in _smoked_tiles),
+        avoiding a full scan of the 30,000-tile map every environment tick.
         """
-        # We still need to scan, but we can skip tiles without effects
-        for y in range(self.world.height):
-            for x in range(self.world.width):
-                tile = self.world.get_tile(x, y)
-                if not tile:
-                    continue
-                effects = getattr(tile, "effects", [])
-                if "smoke" not in effects:
-                    continue
-                age = getattr(tile, "_smoke_age", 0)
-                tile._smoke_age = age + 1
-                if tile._smoke_age > 10:
-                    effects.remove("smoke")
-                    tile._smoke_age = 0
+        for (x, y) in list(self._smoked_tiles):
+            tile = self.world.get_tile(x, y)
+            if not tile:
+                self._smoked_tiles.discard((x, y))
+                continue
+            effects = getattr(tile, "effects", [])
+            if "smoke" not in effects:
+                self._smoked_tiles.discard((x, y))
+                continue
+            age = getattr(tile, "_smoke_age", 0)
+            tile._smoke_age = age + 1
+            if tile._smoke_age > SMOKE_AGE_THRESHOLD:
+                effects.remove("smoke")
+                tile._smoke_age = 0
+                self._smoked_tiles.discard((x, y))
 
     # ================================================================
     # STRUCTURAL COLLAPSE

@@ -125,8 +125,8 @@ def create_agents(world=None):
     named = [
         Agent("Marcus Aurelius", "Senator", 100, 20),
         Agent("Gaius Petronius", "Merchant", 98, 21),
-        # Agent("Lucius Verus", "Senator", 75, 58),
-        # Agent("Spartacus", "Gladiator", 148, 96),
+        Agent("Lucius Verus", "Senator", 100, 19),
+        Agent("Spartacus", "Gladiator", 96, 22),
         # Agent("Maximus", "Gladiator", 150, 98),
         # Agent("Quintus", "Guard (Legionary)", 140, 90),
         # Agent("Publius", "Plebeian", 65, 35),

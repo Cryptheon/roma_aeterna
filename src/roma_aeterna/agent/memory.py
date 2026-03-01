@@ -12,6 +12,11 @@ Enhanced with:
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from roma_aeterna.config import (
+    MEMORY_PROMOTION_IMPORTANCE, MEMORY_IMMEDIATE_LT_IMPORTANCE,
+    GOSSIP_IMPORTANCE_THRESHOLD, GOSSIP_BUFFER_CAP,
+)
+
 
 @dataclass
 class MemoryEntry:
@@ -100,21 +105,27 @@ class Memory:
         )
         self.short_term.append(entry)
 
-        # Overflow: evict least important
+        # Overflow: evict the least important entry.
+        # Use min() rather than sort-then-pop so that insertion (chronological)
+        # order is preserved — get_recent_context relies on short_term[-n:] to
+        # return the n most recently added memories.
         if len(self.short_term) > self._short_cap:
-            self.short_term.sort(key=lambda m: m.importance, reverse=True)
-            evicted = self.short_term.pop()
-            if evicted.importance >= 3.0:
+            min_idx = min(
+                range(len(self.short_term)),
+                key=lambda i: self.short_term[i].importance,
+            )
+            evicted = self.short_term.pop(min_idx)
+            if evicted.importance >= MEMORY_PROMOTION_IMPORTANCE:
                 self._promote_to_long_term(evicted)
 
         # Immediately promote very important events
-        if importance >= 5.0:
+        if importance >= MEMORY_IMMEDIATE_LT_IMPORTANCE:
             self._promote_to_long_term(entry)
 
         # High-importance events are gossip-worthy
-        if importance >= 2.5 and memory_type != "conversation":
+        if importance >= GOSSIP_IMPORTANCE_THRESHOLD and memory_type != "conversation":
             self.gossip_buffer.append(entry)
-            if len(self.gossip_buffer) > 10:
+            if len(self.gossip_buffer) > GOSSIP_BUFFER_CAP:
                 self.gossip_buffer.pop(0)
 
     def _promote_to_long_term(self, entry: MemoryEntry) -> None:
@@ -281,11 +292,36 @@ class Memory:
     # ================================================================
 
     def get_recent_context(self, n: int = 5) -> str:
-        """Return the N most recent short-term memories as text."""
-        recent = self.short_term[-n:]
-        if not recent:
+        """Return the N most recently occurring unique memories, newest first.
+
+        All short-term memories are included regardless of importance — the
+        global deduplication handles repetition by collapsing identical texts
+        with a (×N) suffix and surfacing the most recent occurrence.
+        """
+        if not self.short_term:
             return "Nothing notable has happened recently."
-        return "\n".join(f"- {m.text}" for m in recent)
+
+        # Group all entries by text: track most-recent tick and total count
+        text_groups: Dict[str, List] = {}  # text -> [max_tick, count]
+        for m in self.short_term:
+            if m.text in text_groups:
+                entry = text_groups[m.text]
+                if m.tick > entry[0]:
+                    entry[0] = m.tick
+                entry[1] += 1
+            else:
+                text_groups[m.text] = [m.tick, 1]
+
+        # Sort by most-recent occurrence, take top n unique entries
+        sorted_entries = sorted(
+            text_groups.items(), key=lambda x: x[1][0], reverse=True
+        )[:n]
+
+        lines = []
+        for text, (tick, count) in sorted_entries:
+            suffix = f" (×{count})" if count > 1 else ""
+            lines.append(f"- [Tick {tick}] {text}{suffix}")
+        return "\n".join(lines)
 
     def get_important_memories(self, n: int = 3) -> str:
         """Return the N most important long-term memories."""
@@ -342,6 +378,17 @@ class Memory:
             f"- {name} is at ({x}, {y})"
             for name, (x, y) in list(self.known_locations.items())[:8]
         )
+
+    def get_reflections(self, n: int = 10) -> str:
+        """Return personal notes the agent has REFLECT-ed into long-term memory."""
+        notes = [
+            m for m in self.long_term
+            if m.memory_type == "reflection"
+        ]
+        if not notes:
+            return ""
+        notes.sort(key=lambda m: m.tick, reverse=True)
+        return "\n".join(f"- {m.text}" for m in notes[:n])
 
     def get_preferences_summary(self) -> str:
         """Summarize learned preferences for LLM context."""

@@ -9,6 +9,11 @@ STATUS section — single source of truth, no duplication with perceive().
 from typing import Dict, List, Optional, Any
 import random
 
+from roma_aeterna.config import (
+    PROMPT_RECENT_MEMORIES_N, PROMPT_IMPORTANT_MEMORIES_N,
+    PROMPT_DECISION_HISTORY_N, PROMPT_STATE_TRENDS_N, PROMPT_ENV_INTERVAL,
+)
+
 # ============================================================
 # Personality Archetypes
 # ============================================================
@@ -146,19 +151,19 @@ RULES OF THE WORLD:
 - Pay attention to how you feel! Prioritize survival over routine.
 - IMPORTANT: You must respond ONLY with valid JSON. No other text."""
 
-STATUS_TEMPLATE = """CURRENT STATUS:
+STATUS_TEMPLATE = """YOUR BODY (Tick {current_tick}):
 Health: {health}/{max_health}{health_warning}
 Denarii (money): {denarii}
-{drives_summary}
-
-HOW YOU FEEL:
-{self_assessment}
-
-RECENT TREND (how your state has changed):
-{past_states}
+{drives_summary}{status_effects_block}
 
 INVENTORY:
 {inventory_summary}"""
+
+CONDITION_TEMPLATE = """HOW YOU FEEL RIGHT NOW:
+{self_assessment}{urgency_hints}"""
+
+TRENDS_TEMPLATE = """STATE TRENDS (how your drives have changed):
+{past_states}"""
 
 PERCEPTION_TEMPLATE = """WHAT YOU PERCEIVE:
 {perception_text}"""
@@ -168,6 +173,9 @@ MEMORY_TEMPLATE = """YOUR RECENT MEMORIES:
 
 IMPORTANT MEMORIES:
 {important_memories}
+
+YOUR PERSONAL NOTES (things you chose to remember):
+{reflections}
 
 RELATIONSHIPS:
 {relationships}
@@ -184,6 +192,9 @@ YOUR PREFERENCES (Likes/Dislikes):
 DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
 {decision_history}"""
 
+MARKET_TEMPLATE = """GOODS FOR SALE NEARBY:
+{market_listings}"""
+
 INCOMING_MESSAGE_TEMPLATE = """SOMEONE JUST SPOKE TO YOU:
 {speaker} said: "{message}"
 
@@ -195,39 +206,43 @@ You may respond with TALK, continue what you were doing, walk away, or do anythi
 
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
 Consider how you feel, what you see, your memories, and your personality.
-{urgency_hint}
 Available actions:
-- MOVE: Move one tile. Must specify `direction` (north, south, east, west, northeast, northwest, southeast, southwest).
-- GOTO: Autopilot to a known location. Target MUST be an exact name from your KNOWN LOCATIONS.
-- BUY: Purchase an item. Specify the item as `target` and the market name as `market`. Both must be nearby.
-- WORK: Perform your role duties at an appropriate building to earn money.
-- CRAFT: Create an item if you have the materials. Specify the item as `target`.
-- TALK: Speak to someone. Target MUST be exactly as named in WHAT YOU PERCEIVE. Specify `speech`.
-- INTERACT: Use a nearby building or object. Target MUST be in WHAT YOU PERCEIVE.
-- CONSUME: Eat or drink. Target MUST be an exact item name from your INVENTORY.
-- PICK_UP / DROP: Target MUST be an exact item name.
-- REST / SLEEP: Stand still and recover energy.
-- TRADE: Specify `target` (who), `offer` (your item), and `want` (their item).
-- IDLE: Do nothing.
-- REFLECT: Commit a deep realization, belief, or suspicion to your memory. Specify the thought you want to memorize as `target`.
+- MOVE: Move one tile. Specify `direction` (north, south, east, west, northeast, northwest, southeast, southwest).
+- GOTO: Autopilot to a known location. `target` MUST be an exact name from KNOWN LOCATIONS.
+- BUY: Purchase an item from a nearby market. Specify item as `target` and market name as `market`.
+- WORK: Perform your role duties at an appropriate nearby building to earn money.
+- CRAFT: Create an item from materials in your inventory. Specify the item name as `target`.
+- TALK: Speak to someone nearby. `target` MUST match a name from PEOPLE NEARBY. Specify `speech`.
+- INTERACT: Use a nearby building or object (fountain, temple, bench…). `target` MUST be in STRUCTURES NEARBY.
+- CONSUME: Eat or drink an item from your inventory. `target` MUST be an exact item name from INVENTORY.
+- PICK_UP: Pick up an item from the ground at your location. `target` MUST be an exact item name.
+- DROP: Drop an item from your inventory. `target` MUST be an exact item name from INVENTORY.
+- REST: Stand still and catch your breath (light recovery).
+- SLEEP: Sleep deeply to restore energy fully (takes longer).
+- TRADE: Barter with a nearby person. Specify `target` (their name), `offer` (your item), `want` (their item).
+- INSPECT: Examine something closely to learn more about it. Specify `target`.
+- REFLECT: Write a note to your long-term memory — use this as a scratchpad for anything you don't want to forget: plans, observations, people's secrets, prices you noticed, dangers to avoid, goals. Specify the note as `note` (free text, any length).
+- IDLE: Do nothing this turn.
 
 CRITICAL INSTRUCTIONS:
 1. You must respond with raw JSON only. Do NOT wrap the output in ```json ... ``` markdown blocks.
-2. Only include keys in the JSON that are required for your chosen action.
+2. Only include keys that are needed for your chosen action — omit the rest.
 
 Respond with this EXACT format:
 {{
     "thought": "your inner monologue (1-2 sentences)",
     "action": "ACTION_NAME",
     "direction": "one of the 8 valid directions (only if MOVE)",
-    "target": "exact name of person/object/item/location (if applicable)",
+    "target": "exact name of person/object/item/location (if applicable, not for REFLECT)",
     "market": "exact name of market (only if BUY)",
     "speech": "what you say out loud (only if TALK)",
     "offer": "item you offer (only if TRADE)",
-    "want": "item you want (only if TRADE)"
+    "want": "item you want (only if TRADE)",
+    "note": "free-text note to remember (only if REFLECT)"
 }}/no_think"""
 
-def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str:
+def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
+                 economy: Any = None) -> str:
     persona = agent.personality_seed
 
     personality_parts = []
@@ -292,43 +307,70 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str
 
     self_assessment = "\n".join(self_assessment_parts)
 
+    # Active status effects block (empty string if none)
+    if agent.status_effects.active:
+        effects_list = ", ".join(e.name for e in agent.status_effects.active)
+        status_effects_block = f"\nActive conditions: {effects_list}"
+    else:
+        status_effects_block = ""
+
     status = STATUS_TEMPLATE.format(
+        current_tick=int(agent.current_time),
         health=int(agent.health),
         max_health=int(agent.max_health),
         health_warning=health_warning,
         denarii=agent.denarii,
         drives_summary=agent.get_drives_summary(),
-        self_assessment=self_assessment,
-        past_states=agent.get_past_states_summary(n=3),
+        status_effects_block=status_effects_block,
         inventory_summary=agent.get_inventory_summary(),
     )
 
-    perception_text = agent.perceive(world, agents)
+    urgency_hints = _build_urgency_hint(agent)
+    condition = CONDITION_TEMPLATE.format(
+        self_assessment=self_assessment,
+        urgency_hints=urgency_hints,
+    )
+
+    trends = TRENDS_TEMPLATE.format(
+        past_states=agent.get_past_states_summary(n=PROMPT_STATE_TRENDS_N),
+    )
+
+    # Throttle verbose environment: show full prose every PROMPT_ENV_INTERVAL LLM calls
+    llm_decision_count = sum(1 for d in agent.decision_history if d.get("source") == "llm")
+    include_environment = (llm_decision_count % PROMPT_ENV_INTERVAL == 0)
+    perception_text = agent.perceive(world, agents, include_environment=include_environment)
     perception = PERCEPTION_TEMPLATE.format(perception_text=perception_text)
 
-    # Added preferences to memory template
+    reflections = agent.memory.get_reflections()
     prefs = agent.memory.get_preferences_summary()
     memory = MEMORY_TEMPLATE.format(
-        recent_memories=agent.memory.get_recent_context(n=5),
-        important_memories=agent.memory.get_important_memories(n=3),
+        recent_memories=agent.memory.get_recent_context(n=PROMPT_RECENT_MEMORIES_N),
+        important_memories=agent.memory.get_important_memories(n=PROMPT_IMPORTANT_MEMORIES_N),
+        reflections=reflections if reflections else "You haven't noted anything yet.",
         relationships=agent.memory.get_relationship_summary(),
         beliefs=agent.memory.get_beliefs_summary(),
         known_locations=agent.memory.get_known_locations_summary(),
         preferences=prefs if prefs else "You have no strong preferences yet.",
     )
 
-    urgency_hint = _build_urgency_hint(agent)
-    action = ACTION_TEMPLATE.format(urgency_hint=urgency_hint)
+    action = ACTION_TEMPLATE.format()
 
     # Decision history — tells the LLM what the agent did recently
-    decision_history_text = agent.get_decision_history_summary(n=5)
+    decision_history_text = agent.get_decision_history_summary(n=PROMPT_DECISION_HISTORY_N)
     decision_history = DECISION_HISTORY_TEMPLATE.format(
         decision_history=decision_history_text,
     )
 
+    # New section order: IDENTITY → BODY → CONDITION → TRENDS → WORLD → [MARKET] → MIND → HISTORY → [MESSAGE] → DECIDE
+    sections = [system, status, condition, trends, perception]
+    if economy is not None:
+        market_listings = _get_nearby_market_listings(agent, world, economy)
+        if market_listings:
+            sections.append(MARKET_TEMPLATE.format(market_listings=market_listings))
+    sections += [memory, decision_history]
+
     # Incoming speech — surfaced as explicit context so the agent can
     # freely decide whether to respond, ignore, or do something else.
-    sections = [system, status, perception, memory, decision_history]
     pending = agent._pending_conversation
     if pending:
         incoming = INCOMING_MESSAGE_TEMPLATE.format(
@@ -340,6 +382,7 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any) -> str
         sections.append(incoming)
 
     sections.append(action)
+    print("\n\n".join(sections))
     return "\n\n".join(sections)
 
 def _build_urgency_hint(agent: Any) -> str:
@@ -362,6 +405,34 @@ def _build_urgency_hint(agent: Any) -> str:
     if not hints:
         return ""
     return "\n" + "\n".join(hints) + "\n"
+
+def _get_nearby_market_listings(agent: Any, world: Any, economy: Any) -> str:
+    """Return goods listings for all trade buildings within perception range.
+
+    Shows price and stock so the agent can make an informed BUY decision
+    without needing a separate INTERACT action.
+    """
+    import math
+    from roma_aeterna.config import PERCEPTION_RADIUS
+    from roma_aeterna.world.components import Interactable
+
+    listings: List[str] = []
+    seen: set = set()
+
+    for obj in world.objects:
+        if obj.name in seen:
+            continue
+        dist = math.sqrt((obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2)
+        if dist > PERCEPTION_RADIUS:
+            continue
+        interact = obj.get_component(Interactable)
+        if not interact or interact.interaction_type != "trade":
+            continue
+        seen.add(obj.name)
+        listing = economy.get_market_listing(obj.name)
+        listings.append(listing)
+
+    return "\n\n".join(listings)
 
 def _get_relationship_desc(agent: Any, name: str) -> str:
     rel = agent.memory.relationships.get(name)

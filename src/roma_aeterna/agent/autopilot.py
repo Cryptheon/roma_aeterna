@@ -19,10 +19,20 @@ The autopilot also steps aside when:
   - The agent has been on autopilot too long (novelty-seeking)
 """
 
+import heapq
 import math
 import random
 from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
+
+from roma_aeterna.config import (
+    MAX_AUTOPILOT_TICKS,
+    CRITICAL_THIRST_THRESHOLD, CRITICAL_HUNGER_THRESHOLD,
+    CRITICAL_ENERGY_THRESHOLD, ROUTINE_ENERGY_THRESHOLD,
+    ROUTINE_SOCIAL_THRESHOLD, HEALTH_CRITICAL_THRESHOLD,
+    PATHFINDING_MAX_STEPS, PATHFINDING_ROAD_BIAS,
+    NEARBY_AGENT_RADIUS,
+)
 
 
 class AutopilotState(Enum):
@@ -36,11 +46,6 @@ class AutopilotState(Enum):
     RESTING = "resting"            # Recovering energy
 
 
-# How many ticks the autopilot can run before forcing an LLM call
-# (prevents agents from being mindless robots)
-MAX_AUTOPILOT_TICKS = 30
-
-
 class Autopilot:
     """Fast decision-maker for routine agent behavior."""
 
@@ -50,12 +55,14 @@ class Autopilot:
         self.destination_name: Optional[str] = None  # Where we're going
         self.ticks_on_autopilot: int = 0
         self.override: bool = False                  # LLM requested manual control
+        self._consecutive_path_blocks: int = 0       # Consecutive blocked MOVE steps
 
     def set_path(self, path: List[Tuple[int, int]], destination: str = "") -> None:
         """Set a multi-step path for the agent to follow."""
         self.path = list(path)
         self.destination_name = destination
         self.state = AutopilotState.NAVIGATING
+        self._consecutive_path_blocks = 0
 
     def clear_path(self) -> None:
         """Cancel current navigation."""
@@ -102,6 +109,13 @@ class Autopilot:
         if need:
             return need
 
+        # If a critical biological need exists but the autopilot couldn't
+        # resolve it (no item in inventory, no known route), defer to the
+        # LLM rather than falling through to routine behaviour like REST.
+        if agent.drives["thirst"] > CRITICAL_THIRST_THRESHOLD or agent.drives["hunger"] > CRITICAL_HUNGER_THRESHOLD:
+            self.ticks_on_autopilot = 0
+            return None
+
         # --- Priority 4: Simple routine behavior ---
         routine = self._check_routine(agent, agents, world)
         if routine:
@@ -132,7 +146,7 @@ class Autopilot:
             }
 
         # Health critical + have medicine
-        if agent.health < 25:
+        if agent.health < HEALTH_CRITICAL_THRESHOLD:
             for item in agent.inventory:
                 if getattr(item, "item_type", None) == "medicine":
                     return {
@@ -202,8 +216,15 @@ class Autopilot:
         if int(agent.x) == tx and int(agent.y) == ty:
             self.path.pop(0)
             if not self.path:
+                dest = self.destination_name or "destination"
                 self.state = AutopilotState.IDLE
                 self.ticks_on_autopilot = 0
+                # Give the LLM context about where we ended up
+                agent.memory.add_event(
+                    f"You have arrived near {dest}.",
+                    tick=int(agent.current_time), importance=1.5,
+                    memory_type="event",
+                )
                 return None  # Arrived — let LLM decide what to do here
             target = self.path[0]
             tx, ty = target
@@ -211,10 +232,16 @@ class Autopilot:
         # Compute direction to next waypoint
         direction = self._direction_to(agent.x, agent.y, tx, ty)
 
-        # Check if path is still valid
+        # Check if path is still valid (world may have changed since path was set)
         tile = world.get_tile(tx, ty)
         if not tile or not tile.is_walkable:
+            dest = self.destination_name or "destination"
             self.clear_path()
+            agent.memory.add_event(
+                f"The path to {dest} is blocked. Need to find another route.",
+                tick=int(agent.current_time), importance=1.5,
+                memory_type="event", tags=["blocked"],
+            )
             return None  # Path blocked — LLM re-evaluates
 
         return {
@@ -233,7 +260,7 @@ class Autopilot:
         """Handle critical biological needs with inventory items."""
 
         # Desperate thirst: drink from inventory
-        if agent.drives["thirst"] > 70:
+        if agent.drives["thirst"] > CRITICAL_THIRST_THRESHOLD:
             for item in agent.inventory:
                 if getattr(item, "item_type", None) == "drink":
                     return {
@@ -242,15 +269,18 @@ class Autopilot:
                         "target": item.name,
                         "_autopilot": True,
                     }
-            # No drink in inventory — navigate to known fountain
-            fountain = agent.memory.known_locations.get("Fountain")
-            if fountain and not self.path:
-                self._set_path_toward(agent, fountain, "Fountain", world)
-                if self.path:
-                    return self._follow_path(agent, world)
+            # No drink in inventory — navigate to nearest known water source.
+            # Use partial matching (get_location_for_need) so any fountain name works.
+            if not self.path:
+                loc = agent.memory.get_location_for_need("thirst")
+                if loc:
+                    name, pos = loc
+                    self._set_path_toward(agent, pos, name, world)
+                    if self.path:
+                        return self._follow_path(agent, world)
 
         # Desperate hunger: eat from inventory
-        if agent.drives["hunger"] > 70:
+        if agent.drives["hunger"] > CRITICAL_HUNGER_THRESHOLD:
             for item in agent.inventory:
                 if getattr(item, "item_type", None) == "food":
                     spoiled = getattr(item, "is_spoiled", lambda: False)
@@ -263,9 +293,20 @@ class Autopilot:
                             "target": item.name,
                             "_autopilot": True,
                         }
+            # No food in inventory — navigate to nearest known food source.
+            if not self.path:
+                loc = agent.memory.get_location_for_need("hunger")
+                if loc:
+                    name, pos = loc
+                    self._set_path_toward(agent, pos, name, world)
+                    if self.path:
+                        return self._follow_path(agent, world)
 
-        # Desperate exhaustion: rest
-        if agent.drives["energy"] > 85:
+        # Desperate exhaustion: rest — but only if no critical survival need
+        # is also active (thirst/hunger take priority at their own thresholds).
+        if (agent.drives["energy"] > CRITICAL_ENERGY_THRESHOLD
+                and agent.drives["thirst"] <= CRITICAL_THIRST_THRESHOLD
+                and agent.drives["hunger"] <= CRITICAL_HUNGER_THRESHOLD):
             return {
                 "thought": "I can barely stand... must rest.",
                 "action": "REST",
@@ -284,7 +325,7 @@ class Autopilot:
 
         # Lonely + someone nearby → but this is nuanced, let LLM handle
         # unless it's a very simple case
-        if agent.drives["social"] > 60:
+        if agent.drives["social"] > ROUTINE_SOCIAL_THRESHOLD:
             nearby = self._find_nearby_agents(agent, agents)
             if nearby:
                 # If we know them well, autopilot can handle a greeting
@@ -307,7 +348,7 @@ class Autopilot:
                 return None
 
         # Tired: rest (moderate, not critical)
-        if agent.drives["energy"] > 65 and self.state == AutopilotState.IDLE:
+        if agent.drives["energy"] > ROUTINE_ENERGY_THRESHOLD and self.state == AutopilotState.IDLE:
             return {
                 "thought": "I should take a moment to catch my breath.",
                 "action": "REST",
@@ -322,45 +363,91 @@ class Autopilot:
 
     def _set_path_toward(self, agent: Any, target: Tuple[int, int],
                          name: str, world: Any) -> None:
-        """Generate a simple straight-line path toward a target.
+        """Find an obstacle-avoiding path toward target using A*.
 
-        This is a basic A*-lite: just walk toward the target,
-        preferring road tiles. For proper pathfinding, the engine's
-        Pathfinder should be used instead.
+        Uses a closed set to prevent revisiting tiles, so the agent
+        navigates around buildings, trees, and walls rather than
+        oscillating against them. If the destination is beyond
+        PATHFINDING_MAX_STEPS expansions, returns a partial path to
+        the closest explored point — successive GOTO calls will chain
+        these partial paths until the agent arrives.
         """
-        path: List[Tuple[int, int]] = []
-        cx, cy = int(agent.x), int(agent.y)
+        sx, sy = int(agent.x), int(agent.y)
         tx, ty = target
 
-        # Simple greedy walk (max 20 steps to prevent infinite loops)
-        for _ in range(20):
-            if cx == tx and cy == ty:
+        if (sx, sy) == (tx, ty):
+            return
+
+        # open_heap entries: (f_score, tiebreaker, x, y)
+        counter = 0
+        open_heap: List = []
+        heapq.heappush(open_heap, (0.0, counter, sx, sy))
+
+        came_from: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        g_cost: Dict[Tuple[int, int], float] = {(sx, sy): 0.0}
+        closed: set = set()
+
+        best_partial: Tuple[int, int] = (sx, sy)
+        best_dist = math.sqrt((sx - tx) ** 2 + (sy - ty) ** 2)
+        goal_found = False
+
+        while open_heap:
+            _, _, cx, cy = heapq.heappop(open_heap)
+
+            if (cx, cy) in closed:
+                continue
+            closed.add((cx, cy))
+
+            # Track the closest explored point for partial-path fallback
+            d = math.sqrt((cx - tx) ** 2 + (cy - ty) ** 2)
+            if d < best_dist:
+                best_dist = d
+                best_partial = (cx, cy)
+
+            if (cx, cy) == (tx, ty):
+                goal_found = True
                 break
 
-            best = None
-            best_dist = 999.0
+            # Expansion limit — return partial path to closest point found
+            if len(closed) >= PATHFINDING_MAX_STEPS:
+                break
 
+            current_g = g_cost.get((cx, cy), 0.0)
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     if dx == 0 and dy == 0:
                         continue
                     nx, ny = cx + dx, cy + dy
+                    if (nx, ny) in closed:
+                        continue
                     tile = world.get_tile(nx, ny)
                     if not tile or not tile.is_walkable:
                         continue
-                    dist = math.sqrt((nx - tx) ** 2 + (ny - ty) ** 2)
-                    # Prefer roads
-                    if tile.terrain_type == "road":
-                        dist *= 0.7
-                    if dist < best_dist:
-                        best_dist = dist
-                        best = (nx, ny)
 
-            if best:
-                path.append(best)
-                cx, cy = best
-            else:
-                break
+                    # Diagonal moves cost √2, cardinal moves cost 1
+                    move_cost = 1.414 if (dx != 0 and dy != 0) else 1.0
+                    if tile.terrain_type == "road":
+                        move_cost *= PATHFINDING_ROAD_BIAS
+
+                    ng = current_g + move_cost
+                    if (nx, ny) not in g_cost or ng < g_cost[(nx, ny)]:
+                        g_cost[(nx, ny)] = ng
+                        h = math.sqrt((nx - tx) ** 2 + (ny - ty) ** 2)
+                        counter += 1
+                        heapq.heappush(open_heap, (ng + h, counter, nx, ny))
+                        came_from[(nx, ny)] = (cx, cy)
+
+        end = (tx, ty) if goal_found else best_partial
+        if end == (sx, sy):
+            return  # No progress possible (agent is surrounded)
+
+        # Reconstruct path by tracing came_from back to start
+        path: List[Tuple[int, int]] = []
+        node = end
+        while node in came_from:
+            path.append(node)
+            node = came_from[node]
+        path.reverse()
 
         if path:
             self.set_path(path, name)
@@ -375,7 +462,7 @@ class Autopilot:
             dist = math.sqrt(
                 (other.x - agent.x) ** 2 + (other.y - agent.y) ** 2
             )
-            if dist < 5.0:
+            if dist < NEARBY_AGENT_RADIUS:
                 nearby.append(other)
         return nearby
 

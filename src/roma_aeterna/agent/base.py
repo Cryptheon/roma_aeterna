@@ -23,6 +23,10 @@ from roma_aeterna.config import (
     PERCEPTION_RADIUS, INTERACTION_RADIUS, MAX_INVENTORY_SIZE,
     HUNGER_RATE, ENERGY_RATE, SOCIAL_RATE, THIRST_RATE, COMFORT_RATE,
     HEALTH_REGEN_RATE,
+    MEMORY_SHORT_TERM_CAP, MEMORY_LONG_TERM_CAP,
+    AMBIENT_TEMP_BASE,
+    LIF_BASELINE_URGENCY, LIF_ENV_FIRE_WEIGHT,
+    LIF_ENV_NIGHT_URGENCY,
 )
 
 
@@ -32,6 +36,7 @@ VALID_ACTIONS = {
     "GOTO",     # Multi-step navigation to a named location
     "BUY",      # Purchase from a market
     "WORK",     # Perform role duties at a building
+    "REFLECT",  # Write a personal note to long-term memory
 }
 
 DIRECTION_DELTAS: Dict[str, Tuple[int, int]] = {
@@ -99,7 +104,10 @@ class Agent:
         self._pending_conversation: Optional[Dict[str, str]] = None
 
         # --- Memory & Effects ---
-        self.memory = Memory()
+        self.memory = Memory(
+            short_term_cap=MEMORY_SHORT_TERM_CAP,
+            long_term_cap=MEMORY_LONG_TERM_CAP,
+        )
         self.status_effects = StatusEffectManager()
 
         # --- Decision History (for LLM context + inspection) ---
@@ -112,6 +120,9 @@ class Agent:
         self.drive_snapshots: List[Dict[str, Any]] = []
         self._snapshot_interval: float = 10.0
         self._last_snapshot_time: float = 0.0
+
+        # --- Environmental urgency (updated every LIF_ENV_UPDATE_INTERVAL ticks) ---
+        self._env_urgency: float = 0.0
 
         self._init_common_knowledge()
 
@@ -131,15 +142,19 @@ class Agent:
         # Seed per-agent so it's deterministic but unique
         _rng.seed(hash(self.uid) + 42)
         
+        # Thresholds calibrated for the new urgency scale (baseline=0.3, linear+quadratic
+        # drives). At rest (urgency ~2.0), the roles fire at these approximate intervals:
+        #   Gladiator ~12s, Guard ~15s, Merchant/Plebeian ~18s, Senator ~27s, Priest ~35s
+        # At critical drives (urgency ~26) all roles fire within 1-2s.
         role_profiles = {
-            "Senator":          {"threshold": 10.0, "decay": 0.06, "refractory": 4.0},
-            "Patrician":        {"threshold": 9.0,  "decay": 0.07, "refractory": 3.5},
-            "Priest":           {"threshold": 11.0, "decay": 0.05, "refractory": 4.5},
-            "Gladiator":        {"threshold": 5.0,  "decay": 0.12, "refractory": 2.0},
-            "Guard (Legionary)":{"threshold": 5.5,  "decay": 0.10, "refractory": 2.5},
-            "Merchant":         {"threshold": 7.0,  "decay": 0.08, "refractory": 3.0},
-            "Craftsman":        {"threshold": 8.0,  "decay": 0.07, "refractory": 3.5},
-            "Plebeian":         {"threshold": 7.0,  "decay": 0.09, "refractory": 3.0},
+            "Senator":          {"threshold": 25.0, "decay": 0.06, "refractory": 4.0},
+            "Patrician":        {"threshold": 22.0, "decay": 0.07, "refractory": 3.5},
+            "Priest":           {"threshold": 27.0, "decay": 0.05, "refractory": 4.5},
+            "Gladiator":        {"threshold": 12.0, "decay": 0.12, "refractory": 2.0},
+            "Guard (Legionary)":{"threshold": 14.0, "decay": 0.10, "refractory": 2.5},
+            "Merchant":         {"threshold": 18.0, "decay": 0.08, "refractory": 3.0},
+            "Craftsman":        {"threshold": 20.0, "decay": 0.07, "refractory": 3.5},
+            "Plebeian":         {"threshold": 18.0, "decay": 0.09, "refractory": 3.0},
         }
         
         profile = role_profiles.get(self.role, {"threshold": 8.0, "decay": 0.08, "refractory": 3.0})
@@ -197,27 +212,20 @@ class Agent:
         # Social need reduction
         self.drives["social"] = max(0, self.drives["social"] - 5)
 
-        # Force the brain to fire soon (someone is talking to us!)
-        self.brain.potential += 30.0
-
-    def has_pending_conversation(self) -> bool:
-        return self._pending_conversation is not None
-
-    def consume_pending_conversation(self) -> Optional[Dict[str, str]]:
-        """Retrieve and clear the pending conversation."""
-        convo = self._pending_conversation
-        self._pending_conversation = None
-        return convo
+        # Small nudge — being spoken to is worth noticing, but survival and
+        # the natural LIF cycle still take priority.
+        self.brain.potential += 3.0
 
     # ================================================================
     # PERCEPTION
     # ================================================================
 
     def perceive(self, world: Any, agents: List["Agent"],
-                 radius: Optional[int] = None) -> str:
+                 radius: Optional[int] = None,
+                 include_environment: bool = True) -> str:
         """Build a natural-language description of what the agent sees."""
         radius = radius or PERCEPTION_RADIUS
-        radius_mod = int(self.status_effects.get_modifier("perception_radius", 0))
+        radius_mod = int(self.status_effects.get_additive("perception_radius"))
         effective_radius = max(2, radius + radius_mod)
 
         sections: List[str] = []
@@ -238,9 +246,15 @@ class Agent:
         if nearby_agents:
             sections.append("PEOPLE NEARBY:\n" + "\n".join(nearby_agents))
 
-        env = self._describe_environment(world)
-        if env:
-            sections.append("ENVIRONMENT:\n" + env)
+        # Full environment prose is throttled; anomalies (smoke/rubble) always shown
+        if include_environment:
+            env_full = self._describe_environment_full(world)
+            env_anomalies = self._describe_environment_anomalies(world)
+            env_combined = " ".join(filter(None, [env_full, env_anomalies]))
+        else:
+            env_combined = self._describe_environment_anomalies(world)
+        if env_combined:
+            sections.append("ENVIRONMENT:\n" + env_combined)
 
         directions = self._scan_directions(world)
         if directions:
@@ -321,6 +335,24 @@ class Agent:
         return results
 
     def _scan_agents(self, agents: List["Agent"], radius: int) -> List[str]:
+        _ACTIVITY_LABELS = {
+            "idle": "standing idle",
+            "move": "walking",
+            "talk": "speaking to someone",
+            "rest": "resting",
+            "sleep": "sleeping",
+            "work": "working",
+            "buy": "buying something",
+            "interact": "busy with something",
+            "craft": "crafting",
+            "trade": "trading",
+            "inspect": "examining something",
+            "reflect": "lost in thought",
+            "goto": "heading somewhere",
+            "consume": "eating or drinking",
+            "pick_up": "picking something up",
+            "drop": "dropping something",
+        }
         results: List[str] = []
         for other in agents:
             if other.uid == self.uid or not other.is_alive:
@@ -331,26 +363,50 @@ class Agent:
 
             direction = self._get_direction(other.x, other.y)
             rel = self.memory.relationships.get(other.name)
-            known = f" (you know them)" if rel and rel.familiarity > 10 else ""
 
-            activity = other.action.lower()
+            # Trust level description
+            if rel and rel.familiarity > 10:
+                if rel.trust > 50:
+                    known = " (trusted ally)"
+                elif rel.trust > 20:
+                    known = " (friendly)"
+                elif rel.trust < -50:
+                    known = " (hostile)"
+                elif rel.trust < -20:
+                    known = " (distrusted)"
+                else:
+                    known = " (acquaintance)"
+            else:
+                known = ""
+
+            # Human-readable activity
+            activity = _ACTIVITY_LABELS.get(other.action.lower(), other.action.lower())
+
+            # Speech — always shown if within earshot
             speech = ""
             if other.last_speech and dist < INTERACTION_RADIUS * 2:
                 speech = f', saying: "{other.last_speech}"'
 
-            distress = ""
+            # Visible distress
+            distress_parts = []
             if other.health < 30:
-                distress = ", looks badly injured"
+                distress_parts.append("looks badly injured")
             elif other.status_effects.has_effect("Burned"):
-                distress = ", appears burned"
+                distress_parts.append("appears burned")
+            if other.drives["hunger"] > 70:
+                distress_parts.append("looks hungry")
+            if other.drives["thirst"] > 70:
+                distress_parts.append("looks parched")
+            distress = (", " + ", ".join(distress_parts)) if distress_parts else ""
 
             results.append(
                 f"- {other.name}, a {other.role}, {dist:.0f}m to the {direction}, "
-                f"appears to be {activity}{distress}{known}{speech}"
+                f"{activity}{distress}{known}{speech}"
             )
         return results
 
-    def _describe_environment(self, world: Any) -> str:
+    def _describe_environment_full(self, world: Any) -> str:
+        """Return weather and time-of-day prose (throttled by build_prompt)."""
         parts: List[str] = []
         weather = getattr(world, "_current_weather_desc", None)
         if weather:
@@ -358,16 +414,27 @@ class Agent:
         time_of_day = getattr(world, "_current_time_desc", None)
         if time_of_day:
             parts.append(time_of_day)
+        return " ".join(parts) if parts else ""
 
+    def _describe_environment_anomalies(self, world: Any) -> str:
+        """Return hazard anomalies (smoke, rubble) — always shown regardless of throttle."""
+        parts: List[str] = []
         tile = world.get_tile(int(self.x), int(self.y))
         if tile:
             effects = getattr(tile, "effects", [])
             if "smoke" in effects:
-                parts.append("Thick smoke fills the air here, stinging your eyes.")
+                parts.append("⚠ Thick smoke fills the air here, stinging your eyes.")
             if "rubble" in effects:
-                parts.append("The ground is covered in rubble from a collapsed building.")
-
+                parts.append("⚠ The ground is covered in rubble from a collapsed building.")
         return " ".join(parts) if parts else ""
+
+    def _describe_environment(self, world: Any) -> str:
+        """Combined full + anomalies (kept for any direct callers outside build_prompt)."""
+        parts = [
+            self._describe_environment_full(world),
+            self._describe_environment_anomalies(world),
+        ]
+        return " ".join(p for p in parts if p)
 
     def _describe_current_tile(self, world: Any) -> str:
         tile = world.get_tile(int(self.x), int(self.y))
@@ -499,6 +566,7 @@ class Agent:
 
     def _execute_interaction(self, target: Any, interact: Any) -> str:
         itype = interact.interaction_type
+        name = target.name
 
         if itype == "pray":
             self.drives["comfort"] = max(0, self.drives["comfort"] - 15)
@@ -506,9 +574,17 @@ class Agent:
             effect = create_effect("blessed")
             if effect:
                 self.status_effects.add(effect)
-            return f"You pray at {target.name}. A sense of peace washes over you."
+            return f"You pray at {name}. A sense of peace washes over you."
+
         elif itype == "drink":
-            from roma_aeterna.world.components import Liquid
+            from roma_aeterna.world.components import Liquid, WaterFeature
+            water_feature = target.get_component(WaterFeature)
+            if water_feature and water_feature.is_active:
+                self.drives["thirst"] = max(0, self.drives["thirst"] - 40)
+                effect = create_effect("refreshed")
+                if effect:
+                    self.status_effects.add(effect)
+                return f"You drink fresh water from {name}. Refreshing!"
             liquid = target.get_component(Liquid)
             if liquid and liquid.amount > 0:
                 self.drives["thirst"] = max(0, self.drives["thirst"] - 40)
@@ -516,36 +592,118 @@ class Agent:
                 effect = create_effect("refreshed")
                 if effect:
                     self.status_effects.add(effect)
-                return f"You drink fresh water from {target.name}. Refreshing!"
-            return f"{target.name} is dry."
+                return f"You drink from {name}. Refreshing!"
+            return f"{name} is dry."
+
         elif itype == "rest":
+            from roma_aeterna.world.components import WaterFeature
+            water = target.get_component(WaterFeature)
+            if water and water.is_active:
+                # Bathhouse — full bathing experience
+                self.drives["energy"] = max(0, self.drives["energy"] - 30)
+                self.drives["comfort"] = max(0, self.drives["comfort"] - 20)
+                self.drives["thirst"] = max(0, self.drives["thirst"] - 10)
+                effect = create_effect("refreshed")
+                if effect:
+                    self.status_effects.add(effect)
+                return (f"You bathe at {name}. The warm waters soothe your tired muscles "
+                        f"and the steam clears your mind.")
             self.drives["energy"] = max(0, self.drives["energy"] - 20)
             self.drives["comfort"] = max(0, self.drives["comfort"] - 10)
-            return f"You rest at {target.name}. Your body relaxes."
+            return f"You rest at {name}. Your body relaxes."
+
+        elif itype == "rest_shade":
+            self.drives["energy"] = max(0, self.drives["energy"] - 15)
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 8)
+            name_lower = name.lower()
+            if "cypress" in name_lower or "pine" in name_lower:
+                return (f"You sit in the shade of {name}. The cool shadow offers "
+                        f"relief from the midday heat.")
+            elif "porticus" in name_lower or "portico" in name_lower:
+                return (f"You rest beneath the colonnade of {name}. Merchants and "
+                        f"citizens stroll past in the shade.")
+            return f"You rest in the shade of {name}. The cool shadow relieves the heat."
+
+        elif itype == "forage":
+            import random
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
+            if random.random() < 0.40:
+                self.drives["hunger"] = max(0, self.drives["hunger"] - 15)
+                return (f"You gather olives from {name}. A handful of ripe fruit "
+                        f"fills your palm — bitter but nourishing.")
+            return (f"You search {name} but the branches are picked clean. "
+                    f"You find little worth taking today.")
+
+        elif itype == "read_records":
+            self.drives["social"] = max(0, self.drives["social"] - 5)
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
+            return (f"You study the public records at {name}. Rows of tablets "
+                    f"record Rome's laws, census rolls, and the names of the dead. "
+                    f"History presses against your fingertips.")
+
         elif itype == "trade":
-            return f"You browse the wares at {target.name}."
+            return f"You browse the wares at {name}."
+
         elif itype == "spectate":
             self.drives["social"] = max(0, self.drives["social"] - 15)
             self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
-            return f"You watch the spectacle at {target.name}. The crowd roars!"
+            return f"You watch the spectacle at {name}. The crowd roars!"
+
         elif itype == "train":
             self.drives["energy"] += 15
             effect = create_effect("exercised")
             if effect:
                 self.status_effects.add(effect)
-            return f"You train at {target.name}. Your muscles burn but you feel stronger."
+            return f"You train at {name}. Your muscles burn but you feel stronger."
+
         elif itype == "speak":
             self.drives["social"] = max(0, self.drives["social"] - 20)
-            return f"You address the crowd from {target.name}."
-        elif itype == "deliberate":
-            self.drives["social"] = max(0, self.drives["social"] - 10)
-            return f"You participate in deliberation at {target.name}."
-        elif itype == "audience":
-            return f"You seek an audience at {target.name}."
-        elif itype == "inspect":
-            return f"You carefully inspect {target.name}."
+            return f"You address the crowd from {name}. Your voice carries across the Forum."
 
-        return f"You interact with {target.name}."
+        elif itype == "deliberate":
+            self.drives["social"] = max(0, self.drives["social"] - 15)
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
+            return (f"You join the public deliberations at {name}. "
+                    f"Citizens argue, senators posture, and voices echo off the marble.")
+
+        elif itype == "audience":
+            self.drives["social"] = max(0, self.drives["social"] - 8)
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
+            return (f"You wait at {name}, hoping for an audience. "
+                    f"The halls are filled with petitioners clutching their tablets.")
+
+        elif itype == "inspect":
+            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
+            name_lower = name.lower()
+            if "statue" in name_lower and "equestrian" in name_lower:
+                return (f"You study the equestrian statue of {name}. The bronze rider "
+                        f"commands the square, frozen mid-triumph.")
+            elif "statue" in name_lower:
+                return (f"You stand before {name}. The sculptor's chisel has captured "
+                        f"godlike calm in cold marble.")
+            elif "column of trajan" in name_lower:
+                return (f"You crane your neck to read {name}'s spiral reliefs. "
+                        f"Thousands of soldiers — Dacian wars in stone — wind endlessly upward.")
+            elif "column" in name_lower:
+                return f"You trace the fluting of {name}. Fine marble, quarried from distant hills."
+            elif "obelisk" in name_lower:
+                return (f"You read the hieroglyphs on {name}. Egyptian writing — older than Rome "
+                        f"itself — speaks of distant pharaohs.")
+            elif "arch" in name_lower:
+                return (f"You walk beneath {name} and read the dedication carved in the frieze. "
+                        f"Triumph and glory, written in stone for all to see.")
+            elif "regia" in name_lower:
+                return (f"You examine {name} — the ancient seat of the Pontifex Maximus. "
+                        f"Its stones remember kings. Rome barely does.")
+            elif "shrub" in name_lower:
+                return (f"You crouch beside {name}. A lizard flickers between the stems "
+                        f"and vanishes into the shade.")
+            elif "flower" in name_lower:
+                return (f"You lean close to {name}. The blooms smell faintly sweet "
+                        f"and a bee drifts past, indifferent to Rome's troubles.")
+            return f"You carefully inspect {name}."
+
+        return f"You interact with {name}."
 
     def talk_to(self, target_name: str, message: str, agents: List["Agent"],
                 tick: int) -> Tuple[bool, str]:
@@ -554,7 +712,7 @@ class Agent:
         for other in agents:
             if other.name.lower() == target_name.lower() and other.uid != self.uid:
                 dist = math.sqrt((other.x - self.x) ** 2 + (other.y - self.y) ** 2)
-                if dist <= INTERACTION_RADIUS * 2:
+                if dist <= INTERACTION_RADIUS * 4:  # Match PERCEPTION_RADIUS (8 tiles)
                     target = other
                     break
 
@@ -699,10 +857,10 @@ class Agent:
             self.interaction_cooldown -= 1
 
         # Metabolic rates
-        hunger_mult = self.status_effects.get_modifier("hunger_rate", 1.0)
-        energy_mult = self.status_effects.get_modifier("energy_rate", 1.0)
-        thirst_mult = self.status_effects.get_modifier("thirst_rate", 1.0)
-        comfort_mult = self.status_effects.get_modifier("comfort_rate", 1.0)
+        hunger_mult = self.status_effects.get_multiplier("hunger_rate")
+        energy_mult = self.status_effects.get_multiplier("energy_rate")
+        thirst_mult = self.status_effects.get_multiplier("thirst_rate")
+        comfort_mult = self.status_effects.get_multiplier("comfort_rate")
 
         if "heatwave" in weather_fx or weather_fx.get("thirst", 0) > 0:
             thirst_mult *= 1.8
@@ -724,8 +882,14 @@ class Agent:
         for k in self.drives:
             self.drives[k] = min(100.0, max(0.0, self.drives[k]))
 
+        # Tick food spoilage (lazy import avoids circular dependency)
+        temperature = weather_fx.get("temperature", AMBIENT_TEMP_BASE)
+        from roma_aeterna.world.items import ITEM_DB
+        for item in self.inventory:
+            ITEM_DB.tick_spoilage(item, dt, temperature)
+
         # Health
-        regen = HEALTH_REGEN_RATE + self.status_effects.get_modifier("health_regen", 0.0)
+        regen = HEALTH_REGEN_RATE + self.status_effects.get_additive("health_regen")
         if self.drives["hunger"] > 90:
             self.health -= 0.5 * dt
         if self.drives["thirst"] > 90:
@@ -754,7 +918,18 @@ class Agent:
         return self.brain.update(dt, input_current, self.current_time)
 
     def _compute_urgency(self) -> float:
-        urgency = 0.0
+        """Compute urgency input to the LIF neuron.
+
+        Combines:
+          - A small constant baseline so the neuron always eventually fires
+          - Drive contribution using linear + quadratic terms so moderate
+            drives (30-60%) meaningfully accelerate firing, not just critical ones
+          - Status effect urgency (Burned, Heatstroke, etc.)
+          - Health deficit
+          - Environmental urgency (nearby fire, night outdoors, distressed agents)
+            — updated every LIF_ENV_UPDATE_INTERVAL ticks by the engine
+        """
+        urgency = LIF_BASELINE_URGENCY  # 0.3 — small floor, drives dominate
 
         drive_weights = {
             "hunger": 10.0, "thirst": 12.0, "energy": 5.0,
@@ -763,7 +938,9 @@ class Agent:
         for drive_name, drive_val in self.drives.items():
             ratio = drive_val / 100.0
             weight = drive_weights.get(drive_name, 1.0)
-            urgency += (ratio ** 2) * weight
+            # Linear term: moderate drives (40%) contribute noticeably
+            # Quadratic term: critical drives (70%+) escalate sharply
+            urgency += (ratio * 0.5 + ratio ** 2) * weight
 
         urgency += self.status_effects.get_total_urgency()
 
@@ -771,12 +948,55 @@ class Agent:
             health_ratio = 1.0 - (self.health / self.max_health)
             urgency += (health_ratio ** 1.5) * 20.0
 
-        # Pending conversation adds urgency (someone is talking to us!)
-        if self._pending_conversation:
-            urgency += 25.0
-
-        urgency += 1.0
+        urgency += self._env_urgency
         return urgency
+
+    def update_env_urgency(self, world: Any, agents: List["Agent"]) -> None:
+        """Scan the environment for threats and cache result in _env_urgency.
+
+        Called every LIF_ENV_UPDATE_INTERVAL ticks by the engine — not every
+        tick, since it involves tile scans. This is what makes the LIF react
+        to the world rather than only to internal drives:
+
+          - Nearby fire → large urgency spike (intensity / distance weighted)
+          - Outdoors at night → mild persistent unease
+          - Nearby agent with critical health → empathic alarm
+        """
+        from roma_aeterna.world.components import Flammable
+        urgency = 0.0
+        ax, ay = int(self.x), int(self.y)
+
+        # Fire proximity — 11×11 tile scan, weighted by intensity and 1/distance
+        for dy in range(-5, 6):
+            for dx in range(-5, 6):
+                tile = world.get_tile(ax + dx, ay + dy)
+                if not tile or not tile.building:
+                    continue
+                flam = tile.building.get_component(Flammable)
+                if flam and flam.is_burning and not getattr(flam, "is_decorative", False):
+                    dist = math.sqrt(dx * dx + dy * dy) + 0.1
+                    urgency += (flam.fire_intensity / dist) * LIF_ENV_FIRE_WEIGHT
+
+        # Night outdoors — unprotected agents feel exposed
+        time_desc = getattr(world, "_current_time_desc", "")
+        if "night" in time_desc.lower():
+            tile = world.get_tile(ax, ay)
+            is_sheltered = (
+                tile and tile.building
+                and getattr(tile.building, "obj_type", None) == "building"
+            )
+            if not is_sheltered:
+                urgency += LIF_ENV_NIGHT_URGENCY
+
+        # Nearby agents in critical health — visible distress is alarming
+        for other in agents:
+            if other.uid == self.uid or not other.is_alive:
+                continue
+            dist = math.sqrt((other.x - self.x) ** 2 + (other.y - self.y) ** 2)
+            if dist <= 10.0 and other.health < 30:
+                urgency += 2.0 * (1.0 - dist / 10.0)
+
+        self._env_urgency = urgency
 
     # ================================================================
     # INSPECTION DATA
@@ -847,20 +1067,40 @@ class Agent:
         if len(self.llm_response_log) > 10:
             self.llm_response_log.pop(0)
 
-    def get_decision_history_summary(self, n: int = 5) -> str:
-        """Return last N decisions as text for LLM context."""
+    def get_decision_history_summary(self, n: int = 10) -> str:
+        """Return last N decisions, newest first.
+
+        Consecutive entries with the same action + target + source are collapsed
+        into a single line with a (×N) count — this prevents autopilot MOVE
+        runs from consuming every slot in the history view.
+        """
         if not self.decision_history:
             return "You have not taken any actions yet."
         recent = self.decision_history[-n:]
-        lines = []
+
+        # Collapse consecutive identical (action, target, source) runs
+        groups: List[Dict[str, Any]] = []
         for d in recent:
+            key = (d["action"], d.get("target", ""), d["source"])
+            if groups and groups[-1]["key"] == key:
+                groups[-1]["entries"].append(d)
+            else:
+                groups.append({"key": key, "entries": [d]})
+
+        lines = []
+        for g in reversed(groups):  # newest first
+            d = g["entries"][-1]    # most recent entry in this run
             src = "[auto]" if d["source"] == "autopilot" else "[think]"
-            action_desc = f"{d['action']}"
+            action_desc = d["action"]
             if d.get("target"):
                 action_desc += f" → {d['target']}"
             if d.get("speech"):
-                action_desc += f' (said: "{d["speech"][:40]}")'
-            lines.append(f"  {src} {action_desc}: {d['thought'][:60]}")
+                action_desc += f' (said: "{d["speech"][:60]}")'
+            count = len(g["entries"])
+            count_suffix = f" (×{count})" if count > 1 else ""
+            lines.append(
+                f"  [Tick {d['tick']}] {src} {action_desc}{count_suffix}: {d['thought'][:100]}"
+            )
         return "\n".join(lines)
 
     def get_full_history_text(self) -> str:
@@ -885,7 +1125,7 @@ class Agent:
         items_desc = []
         for item in self.inventory:
             freshness = ""
-            if getattr(item, "spoilable", False) and getattr(item, "freshness", 1.0) < 0.5:
+            if getattr(item, "spoilable", False) and getattr(item, "freshness", 1.0) < 0.7:
                 freshness = " (going stale)"
             items_desc.append(f"- {item.name}{freshness}")
         return f"You carry ({len(self.inventory)}/{MAX_INVENTORY_SIZE}):\n" + "\n".join(items_desc)
@@ -916,11 +1156,11 @@ class Agent:
             parts.append(f"- {drive.capitalize()}: {word} ({int(value)}%){trend}")
         return "\n".join(parts)
 
-    def get_past_states_summary(self, n: int = 3) -> str:
+    def get_past_states_summary(self, n: int = 6) -> str:
         """Return recent drive snapshots as text for LLM context."""
         if len(self.drive_snapshots) < 2:
             return "No prior state data yet."
-        
+
         recent = self.drive_snapshots[-n:]
         lines = []
         for snap in recent:
@@ -928,6 +1168,7 @@ class Agent:
             lines.append(
                 f"  Tick {snap['tick']}: HP={snap['health']}, "
                 f"Hunger={d['hunger']:.0f}%, Thirst={d['thirst']:.0f}%, "
-                f"Energy={d['energy']:.0f}%, Social={d['social']:.0f}%"
+                f"Energy={d['energy']:.0f}%, Social={d['social']:.0f}%, "
+                f"Comfort={d.get('comfort', 0):.0f}%"
             )
         return "\n".join(lines)

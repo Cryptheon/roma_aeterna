@@ -17,14 +17,12 @@ The economy runs on a tick-based cycle:
 import random
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from roma_aeterna.config import TPS
+from roma_aeterna.config import (
+    TPS, WAGE_INTERVAL, RESTOCK_INTERVAL, WORKING_PROXIMITY,
+    MARKET_CAPACITY, PRICE_VARIANCE_MIN, PRICE_VARIANCE_MAX,
+    SCARCITY_PRICE_MULTIPLIER,
+)
 
-
-# How often wages are paid (in ticks). ~Every 2 minutes at 10 TPS.
-WAGE_INTERVAL: int = 1200
-
-# How often markets restock. ~Every 3 minutes.
-RESTOCK_INTERVAL: int = 1800
 
 # Base prices in denarii
 BASE_PRICES: Dict[str, int] = {
@@ -91,7 +89,7 @@ class MarketInventory:
     """Tracks what a market building currently has in stock."""
     items: List[str] = field(default_factory=list)
     prices: Dict[str, int] = field(default_factory=dict)
-    max_capacity: int = 20
+    max_capacity: int = MARKET_CAPACITY
 
 
 class EconomySystem:
@@ -101,7 +99,9 @@ class EconomySystem:
         self.market_inventories: Dict[str, MarketInventory] = {}
         self.price_modifiers: Dict[str, float] = {}  # item -> multiplier
         self._wage_timer: int = 0
-        self._restock_timer: int = 0
+        # Start one tick before the interval so markets are stocked immediately
+        # on the first simulation tick, not three minutes in.
+        self._restock_timer: int = RESTOCK_INTERVAL - 1
 
     def tick(self, world: Any, agents: List[Any],
              event_bus: Any, current_tick: int) -> None:
@@ -145,7 +145,7 @@ class EconomySystem:
                 dist = math.sqrt(
                     (obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2
                 )
-                if dist <= 8.0:  # Near workplace
+                if dist <= WORKING_PROXIMITY and agent.action in ("WORKING", "WORK"):
                     is_working = True
                     break
 
@@ -189,7 +189,7 @@ class EconomySystem:
                 # Set price with variance
                 base = BASE_PRICES.get(item_name, 5)
                 modifier = self.price_modifiers.get(item_name, 1.0)
-                variance = random.uniform(0.8, 1.2)
+                variance = random.uniform(PRICE_VARIANCE_MIN, PRICE_VARIANCE_MAX)
                 inv.prices[item_name] = max(1, int(base * modifier * variance))
 
             # Emit restock event
@@ -211,35 +211,44 @@ class EconomySystem:
         if not inv:
             return False, f"{market_name} has no goods."
 
-        if item_name not in inv.items:
+        # Case-insensitive search — LLM output may not match DB capitalisation
+        actual_name = next(
+            (i for i in inv.items if i.lower() == item_name.lower()), None
+        )
+        if actual_name is None:
             return False, f"{market_name} doesn't have {item_name}."
 
-        price = inv.prices.get(item_name, 5)
+        price = inv.prices.get(actual_name, 5)
         if agent.denarii < price:
-            return False, f"You can't afford {item_name} ({price} denarii). You have {agent.denarii}."
+            return False, (
+                f"You can't afford {actual_name} ({price} denarii). "
+                f"You have {agent.denarii}."
+            )
 
         from roma_aeterna.config import MAX_INVENTORY_SIZE
         if len(agent.inventory) >= MAX_INVENTORY_SIZE:
             return False, "Your inventory is full."
 
-        # Transaction
-        agent.denarii -= price
-        inv.items.remove(item_name)
+        # Create the item object before touching money or stock —
+        # so a missing template can't silently eat denarii.
+        from roma_aeterna.world.items import ITEM_DB
+        item = ITEM_DB.create_item(actual_name)
+        if not item:
+            return False, f"{actual_name} is not available."
 
-        try:
-            from roma_aeterna.world.items import ITEM_DB
-            item = ITEM_DB.create_item(item_name)
-            if item:
-                agent.inventory.append(item)
-        except Exception:
-            pass
+        # Commit transaction
+        agent.denarii -= price
+        inv.items.remove(actual_name)
+        agent.inventory.append(item)
 
         # Scarcity: if stock is low, increase price modifier
-        remaining = inv.items.count(item_name)
+        remaining = inv.items.count(actual_name)
         if remaining <= 1:
-            self.price_modifiers[item_name] = self.price_modifiers.get(item_name, 1.0) * 1.1
+            self.price_modifiers[actual_name] = (
+                self.price_modifiers.get(actual_name, 1.0) * SCARCITY_PRICE_MULTIPLIER
+            )
 
-        return True, f"You bought {item_name} for {price} denarii."
+        return True, f"You bought {actual_name} for {price} denarii."
 
     def get_market_listing(self, market_name: str) -> str:
         """Get a text description of what's for sale."""

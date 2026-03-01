@@ -68,6 +68,8 @@ def _serialize_agent(agent: Any) -> Dict:
         "memory": _serialize_memory(agent.memory),
         # Status effects
         "status_effects": _serialize_status_effects(agent.status_effects),
+        # Decision history (last 5 for context continuity)
+        "decision_history": agent.decision_history[-5:],
     }
 
 
@@ -83,6 +85,7 @@ def _serialize_memory(memory: Any) -> Dict:
                 "related_agent": m.related_agent,
                 "location": list(m.location) if m.location else None,
                 "tags": m.tags,
+                "valence": m.valence,
             }
             for m in memory.short_term
         ],
@@ -95,6 +98,7 @@ def _serialize_memory(memory: Any) -> Dict:
                 "related_agent": m.related_agent,
                 "location": list(m.location) if m.location else None,
                 "tags": m.tags,
+                "valence": m.valence,
             }
             for m in memory.long_term
         ],
@@ -243,6 +247,9 @@ def _restore_agent(agent: Any, data: Dict) -> None:
     # Status effects
     _restore_status_effects(agent.status_effects, data.get("status_effects", []))
 
+    # Decision history
+    agent.decision_history = data.get("decision_history", [])
+
 
 def _restore_memory(memory: Any, data: Dict) -> None:
     """Restore memory from saved data."""
@@ -250,7 +257,7 @@ def _restore_memory(memory: Any, data: Dict) -> None:
 
     memory.short_term = []
     for m in data.get("short_term", []):
-        memory.short_term.append(MemoryEntry(
+        entry = MemoryEntry(
             text=m["text"],
             tick=m["tick"],
             importance=m["importance"],
@@ -258,11 +265,13 @@ def _restore_memory(memory: Any, data: Dict) -> None:
             related_agent=m.get("related_agent"),
             location=tuple(m["location"]) if m.get("location") else None,
             tags=m.get("tags", []),
-        ))
+        )
+        entry.valence = m.get("valence", 0.0)
+        memory.short_term.append(entry)
 
     memory.long_term = []
     for m in data.get("long_term", []):
-        memory.long_term.append(MemoryEntry(
+        entry = MemoryEntry(
             text=m["text"],
             tick=m["tick"],
             importance=m["importance"],
@@ -270,7 +279,9 @@ def _restore_memory(memory: Any, data: Dict) -> None:
             related_agent=m.get("related_agent"),
             location=tuple(m["location"]) if m.get("location") else None,
             tags=m.get("tags", []),
-        ))
+        )
+        entry.valence = m.get("valence", 0.0)
+        memory.long_term.append(entry)
 
     memory.relationships = {}
     for name, rel_data in data.get("relationships", {}).items():
@@ -312,6 +323,8 @@ def _restore_status_effects(manager: Any, data: List[Dict]) -> None:
         if effect:
             effect.remaining_ticks = effect_data["remaining_ticks"]
             manager.active.append(effect)
+        else:
+            print(f"[SAVE] Warning: unknown effect '{effect_data['name']}', dropping.")
 
 
 def _restore_weather(weather: Any, data: Dict) -> None:
@@ -424,6 +437,10 @@ def save_game(engine: Any, path: Optional[str] = None) -> str:
         "INSERT INTO metadata VALUES (?, ?)",
         ("simulation", json.dumps(meta)),
     )
+    cursor.execute(
+        "INSERT INTO metadata VALUES (?, ?)",
+        ("economy", json.dumps(engine.economy.serialize())),
+    )
 
     # --- Agents ---
     for agent in engine.agents:
@@ -517,6 +534,12 @@ def load_game(engine: Any, path: Optional[str] = None) -> bool:
             agent = agent_map.get(uid) or name_map.get(data.get("name"))
             if agent:
                 _restore_agent(agent, data)
+
+        # --- Economy ---
+        cursor.execute("SELECT value FROM metadata WHERE key = 'economy'")
+        econ_row = cursor.fetchone()
+        if econ_row:
+            engine.economy.restore(json.loads(econ_row[0]))
 
         conn.close()
 

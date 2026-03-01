@@ -22,10 +22,7 @@ from .chaos import ChaosEngine
 from roma_aeterna.core.events import EventBus, Event, EventType
 from roma_aeterna.engine.economy import EconomySystem
 from roma_aeterna.llm.worker import LLMWorker
-from roma_aeterna.config import TPS
-
-
-AUTOSAVE_INTERVAL: int = 3000
+from roma_aeterna.config import TPS, AUTOSAVE_INTERVAL, LIF_ENV_UPDATE_INTERVAL
 
 
 class SimulationEngine:
@@ -109,6 +106,9 @@ class SimulationEngine:
 
             self.chaos.tick_agents(self.agents, self.weather)
 
+            # Tick interactable cooldowns so buildings become usable again
+            self._tick_interactable_cooldowns(dt)
+
             # --- 2. Economy ---
             self.economy.tick(
                 self.world, self.agents, self.event_bus, self.tick_count
@@ -180,6 +180,10 @@ class SimulationEngine:
              b. If autopilot returns None → queue for LLM (System 2)
           4. Execute the decision
         """
+        # Periodically scan environment so LIF urgency reflects threats, not just drives
+        if self.tick_count % LIF_ENV_UPDATE_INTERVAL == 0:
+            agent.update_env_urgency(self.world, self.agents)
+
         did_fire = agent.update_biological(dt, weather_fx)
 
         # --- Autopilot path-following (runs even without brain fire) ---
@@ -204,6 +208,14 @@ class SimulationEngine:
                 # System 2: Need LLM
                 agent.waiting_for_llm = True
                 self.llm_worker.queue_request(agent)
+
+    def _tick_interactable_cooldowns(self, dt: float) -> None:
+        """Decrement cooldown on all interactable world objects each tick."""
+        from roma_aeterna.world.components import Interactable
+        for obj in self.world.objects:
+            interact = obj.get_component(Interactable)
+            if interact and interact.cooldown > 0:
+                interact.cooldown = max(0.0, interact.cooldown - dt)
 
     def _execute_autopilot_decision(self, agent: Any, decision: dict) -> None:
         """Execute a decision from the autopilot (same format as LLM decisions)."""
