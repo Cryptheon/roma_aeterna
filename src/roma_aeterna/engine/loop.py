@@ -56,7 +56,7 @@ class SimulationEngine:
         self.llm_worker.start()
 
     def _initialize_agents(self) -> None:
-        """Give agents personalities and starting items."""
+        """Give agents personalities, starting items, and world knowledge."""
         from roma_aeterna.llm.personalities import assign_personality, ROLE_STARTING_INVENTORY
         from roma_aeterna.world.items import ITEM_DB
 
@@ -80,6 +80,42 @@ class SimulationEngine:
                             agent.inventory.append(item)
                     except Exception:
                         pass
+
+        # Seed world locations — every citizen knows where key buildings are
+        self._seed_world_knowledge()
+
+    def _seed_world_knowledge(self) -> None:
+        """Teach every non-animal agent the locations of key world buildings.
+
+        Scans world.objects for markets, fountains, and temples so that
+        GOTO works from the first LLM call without requiring prior exploration.
+        """
+        from roma_aeterna.world.components import Interactable, WaterFeature
+
+        markets: list = []
+        fountains: list = []
+        temples: list = []
+
+        for obj in self.world.objects:
+            pos = (int(obj.x), int(obj.y))
+            interact = obj.get_component(Interactable)
+            if interact and interact.interaction_type == "trade":
+                markets.append((obj.name, pos))
+            wf = obj.get_component(WaterFeature)
+            if wf:
+                fountains.append((obj.name, pos))
+            if "temple" in obj.name.lower():
+                temples.append((obj.name, pos))
+
+        for agent in self.agents:
+            if getattr(agent, "is_animal", False):
+                continue
+            for name, pos in markets:
+                agent.memory.learn_location(name, pos)
+            for name, pos in fountains:
+                agent.memory.learn_location(name, pos)
+            for name, pos in temples:
+                agent.memory.learn_location(name, pos)
 
     def _try_load_save(self) -> None:
         from roma_aeterna.core.persistence import load_game, has_save

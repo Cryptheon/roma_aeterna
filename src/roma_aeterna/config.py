@@ -2,8 +2,10 @@
 Rome: Aeterna — Global Configuration
 """
 
+import os
+
 # --- Population ---
-N_AGENTS: int = 20                  # Total number of citizens to spawn
+N_AGENTS: int = 2                  # Total number of citizens to spawn
 NAMED_AGENTS_FIRST: bool = True      # Spawn hand-placed agents before random ones
 
 
@@ -28,10 +30,27 @@ MAX_ZOOM: float = 4.0
 DEFAULT_ZOOM: float = 2.0
 
 # --- LLM ---
-VLLM_URL: str = "http://localhost:8000/v1"
-VLLM_MODEL: str = "Qwen/Qwen3-4B-AWQ" #"Qwen/Qwen3-30B-A3B-GPTQ-Int4" #"Qwen/Qwen3-8B-AWQ" 
+# Which inference backend to use:
+#   "openai"  — any OpenAI-compatible endpoint (local vLLM, OpenAI, Mistral, etc.)
+#   "gemini"  — Google's native Gemini SDK (pip install google-genai);
+#               reads GEMINI_API_KEY from environment automatically.
+LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "gemini")
+
+# Model identifier (used by both providers).
+# OpenAI-compat examples: "Qwen/Qwen3-4B-AWQ", "gpt-4o-mini"
+# Gemini examples:        "gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-lite-latest"
+LLM_MODEL: str = os.environ.get("LLM_MODEL", "gemini-flash-lite-latest")
+
+# OpenAI-compatible provider settings (ignored when LLM_PROVIDER="gemini").
+LLM_BASE_URL: str = os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1")
+LLM_API_KEY: str = os.environ.get("LLM_API_KEY", "vllm")
+
 LLM_TEMPERATURE: float = 0.6
 LLM_MAX_TOKENS: int = 512
+
+# Backwards-compatible aliases.
+VLLM_URL: str = LLM_BASE_URL
+VLLM_MODEL: str = LLM_MODEL
 
 # --- Agent Perception ---
 PERCEPTION_RADIUS: int = 8          # Tiles an agent can "see"

@@ -1,8 +1,14 @@
 """
 Prompt System — Dynamic context assembly for LLM inference.
 
-Self-assessment (health, drives, status effects) lives here in the
-STATUS section — single source of truth, no duplication with perceive().
+Prompt zones (in order):
+  1. WHO YOU ARE    — Identity, personality, goals, fears, world rules  (static per agent)
+  2. YOUR STATE     — Body, drives, position, current action, last thought, inventory
+  3. THE WORLD      — Perception snapshot + market goods + any incoming conversation
+  4. RECENT PAST    — Decision history + event outcomes + drive trends (all history together)
+  5. YOUR MIND      — Important memories, recent memories, notes, relationships, beliefs, locations, prefs
+  6. YOUR CONSCIENCE — Urgency warnings (⚠) + stagnation hints + vita activa reminder
+  →  CHOOSE ACTION
 """
 
 from typing import Dict, List, Optional, Any
@@ -16,7 +22,7 @@ from roma_aeterna.config import (
 from .personalities import assign_personality, ROLE_STARTING_INVENTORY
 
 # ============================================================
-# Dynamic Prompt Builder
+# Templates
 # ============================================================
 
 SYSTEM_PROMPT_TEMPLATE = """You are {name}, a {role} living in Ancient Rome during the reign of Emperor Marcus Aurelius (161 AD).
@@ -30,48 +36,66 @@ YOUR GOALS:
 YOUR FEARS:
 {fears_block}
 
-RULES OF THE WORLD:
-- You exist on a grid. You can move one tile at a time in 8 directions or use GOTO to navigate to known places automatically.
-- You have physical needs. If hunger or thirst reach critical levels, you will die.
-- You can carry items, trade, buy from markets, and consume food/drink. Spoiled food will make you sick.
-- Buildings have functions: temples for prayer, fountains for drinking, markets for buying, bathhouses for rest.
-- You can work at specific buildings corresponding to your role to earn denarii.
-- Fire is deadly. If you see burning or smell smoke, get away.
-- You remember things and have preferences based on past experiences (e.g., if you got sick from bread, you dislike bread).
-- Pay attention to how you feel! Prioritize survival over routine.
-- IMPORTANT: You must respond ONLY with valid JSON. No other text."""
+RULES OF THIS WORLD:
+- You exist on a grid. Move one tile at a time or use GOTO to navigate to known places automatically.
+- Physical needs are real. If hunger or thirst reach critical levels, you will die.
+- You can carry items, trade, buy from markets, consume food and drink. Spoiled food causes sickness.
+- Buildings have functions: temples for prayer, fountains for drinking, markets for goods, bathhouses for rest.
+- Work at buildings suited to your role to earn denarii.
+- Fire is deadly — flee if you see flames or smell smoke.
+- Your memories and preferences are shaped by what you experience.
+- IMPORTANT: Respond ONLY with valid JSON. No other text."""
 
-STATUS_TEMPLATE = """YOUR BODY (Tick {current_tick}):
-Position: {position}
-Health: {health}/{max_health}{health_warning}
-Denarii (money): {denarii}
-{drives_summary}{status_effects_block}
+# Zone 2 — who the agent IS right now, physically and mentally
+NOW_YOU_TEMPLATE = """══ YOUR STATE ══  (Tick {current_tick})
+Position:  {position}
+Health:    {health}/{max_health}{health_warning}   |   Denarii: {denarii}
+Drives:    {drives_summary}{status_effects_block}
+Feel:      {self_assessment}{mood_line}
+
+Currently: {current_action}
+Thinking:  "{last_thought}"
 
 INVENTORY:
 {inventory_summary}"""
 
-CONDITION_TEMPLATE = """HOW YOU FEEL RIGHT NOW:
-{self_assessment}{mood_line}{urgency_hints}"""
-
-MARKET_TEMPLATE = """GOODS FOR SALE NEARBY:
-{market_listings}"""
-
-TRENDS_TEMPLATE = """STATE TRENDS (how your drives have changed):
-{past_states}"""
-
-PERCEPTION_TEMPLATE = """WHAT YOU PERCEIVE:
+# Zone 3 — the world right now
+NOW_WORLD_TEMPLATE = """══ THE WORLD ══
 {perception_text}"""
 
-MEMORY_TEMPLATE = """YOUR RECENT MEMORIES:
-{recent_memories}
+MARKET_BLOCK_TEMPLATE = """GOODS FOR SALE NEARBY:
+{market_listings}"""
 
+INCOMING_MESSAGE_TEMPLATE = """⚡ RIGHT NOW — SOMEONE IS SPEAKING TO YOU:
+{speaker}: "{message}"
+Your relationship with them: {relationship}
+Conversation so far:
+{convo_history}
+You may reply with TALK, ignore them, or do anything else. Your choice."""
+
+# Zone 4 — what has happened (all history together)
+PAST_TEMPLATE = """══ RECENT PAST ══
+WHAT YOU JUST DID:
+{decision_history}
+
+WHAT HAPPENED AROUND YOU:
+{outcomes}
+
+HOW YOUR DRIVES CHANGED:
+{past_states}"""
+
+# Zone 5 — everything the agent knows and remembers
+MIND_TEMPLATE = """══ YOUR MIND ══
 IMPORTANT MEMORIES:
 {important_memories}
 
-YOUR PERSONAL NOTES (things you chose to remember):
+RECENT MEMORIES:
+{recent_memories}
+
+YOUR PERSONAL NOTES:
 {reflections}
 
-RELATIONSHIPS:
+PEOPLE YOU KNOW:
 {relationships}
 
 BELIEFS:
@@ -80,73 +104,72 @@ BELIEFS:
 KNOWN LOCATIONS:
 {known_locations}
 
-YOUR PREFERENCES (Likes/Dislikes):
+PREFERENCES:
 {preferences}"""
 
-INCOMING_MESSAGE_TEMPLATE = """SOMEONE JUST SPOKE TO YOU:
-{speaker} said: "{message}"
-
-Your relationship with them: {relationship}
-Recent conversation history:
-{convo_history}
-
-You may respond with TALK, continue what you were doing, walk away, or do anything else. This is entirely your choice."""
-
-DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
-{decision_history}"""
-
-OUTCOMES_TEMPLATE = """WHAT RECENTLY HAPPENED (chronological — most recent at the bottom):
-{outcomes}"""
-
-SPARK_TEMPLATE = """YOUR CONSCIENCE — READ THIS CAREFULLY:
+# Zone 6 — warnings + behavioral guidance (urgency first, then coaching, then reminder)
+CONSCIENCE_TEMPLATE = """══ YOUR CONSCIENCE ══
 {body}"""
 
-ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
-Consider how you feel, what you see, your memories, and your personality.
+ACTION_TEMPLATE = """══ CHOOSE YOUR ACTION ══
+Consider your state, the world around you, your recent past, your memories, and your conscience.
 Available actions:
-- MOVE: Move one tile. Specify `direction` (north, south, east, west, northeast, northwest, southeast, southwest).
+- MOVE: Move one tile. `direction` must be one of: north, south, east, west, northeast, northwest, southeast, southwest.
 - GOTO: Autopilot to a known location. `target` MUST be an exact name from KNOWN LOCATIONS.
-- BUY: Purchase an item from a nearby market. Specify item as `target` and market name as `market`.
-- WORK: Perform your role duties at an appropriate nearby building to earn money.
-- CRAFT: Create an item from materials in your inventory. Specify the item name as `target`.
+- BUY: Purchase from a nearby market. `target` is the item name. `market` is the market name.
+- WORK: Perform your role duties at an appropriate nearby building to earn denarii.
+- CRAFT: Create an item from materials in your inventory. `target` is the item name.
 - TALK: Speak to someone nearby. `target` MUST match a name from PEOPLE NEARBY. Specify `speech`.
-- INTERACT: Use a nearby building or object (fountain, temple, bench…). `target` MUST be in STRUCTURES NEARBY.
-- CONSUME: Eat or drink an item from your inventory. `target` MUST be an exact item name from INVENTORY.
-- PICK_UP: Pick up an item from the ground at your location. `target` MUST be an exact item name.
-- DROP: Drop an item from your inventory. `target` MUST be an exact item name from INVENTORY.
-- REST: Stand still and catch your breath (light recovery).
-- SLEEP: Sleep deeply to restore energy fully (takes longer).
-- TRADE: Barter with a nearby person. Specify `target` (their name), `offer` (your item), `want` (their item).
-- ATTACK: Strike a nearby person or animal. `target` MUST be a name from PEOPLE NEARBY. Optionally specify `item` (a weapon from your INVENTORY) — unarmed if omitted.
-- GIVE: Give an item from your inventory to a nearby person — no reciprocation expected. `target` is their name, `item` is the item name from your INVENTORY.
-- SHOUT: Call out loudly so everyone nearby hears. Specify `speech`. Wider range than TALK — useful for warnings, calls for help, or public declarations.
-- INSPECT: Examine something closely to learn more about it. Specify `target`.
-- REFLECT: Write a note to your long-term memory — use this as a scratchpad for anything you don't want to forget: plans, observations, people's secrets, prices you noticed, dangers to avoid, goals. Specify the note as `note` (free text, any length).
-- PRAY: Address Jupiter at a nearby temple. `target` MUST be a temple name from STRUCTURES NEARBY. Specify your prayer as `speech` — a question, request, or plea. You may receive a divine response.
+- INTERACT: Use a nearby building or object. `target` MUST be in STRUCTURES NEARBY.
+- CONSUME: Eat or drink from inventory. `target` MUST be an exact item name from INVENTORY.
+- PICK_UP: Pick up an item from the ground. `target` MUST be an exact item name.
+- DROP: Drop an item from inventory. `target` MUST be an exact item name from INVENTORY.
+- REST: Catch your breath (light energy recovery).
+- SLEEP: Sleep deeply to restore energy fully.
+- TRADE: Barter with someone nearby. `target` is their name. `offer` is your item. `want` is their item.
+- ATTACK: Strike a nearby person or animal. `target` is their name. `item` is a weapon from INVENTORY (unarmed if omitted).
+- GIVE: Give an item to someone nearby — no reciprocation expected. `target` is their name. `item` is from INVENTORY.
+- SHOUT: Call out loudly so everyone nearby hears. Specify `speech`. Wider range than TALK.
+- INSPECT: Examine something closely to learn more. Specify `target`.
+- REFLECT: Write a note to long-term memory — plans, secrets, prices, dangers, goals. Specify as `note`.
+- PRAY: Address Jupiter at a nearby temple. `target` MUST be a temple from STRUCTURES NEARBY. `speech` is your prayer.
 - IDLE: Do nothing this turn.
 
 CRITICAL INSTRUCTIONS:
-1. You must respond with raw JSON only. Do NOT wrap the output in ```json ... ``` markdown blocks.
-2. Only include keys that are needed for your chosen action — omit the rest.
+1. Respond with raw JSON only. Do NOT wrap in ```json ... ``` markdown blocks.
+2. Only include keys needed for your chosen action — omit the rest.
 
-Respond with this EXACT format:
 {{
     "thought": "your inner monologue (1-2 sentences)",
     "action": "ACTION_NAME",
-    "direction": "one of the 8 valid directions (only if MOVE)",
-    "target": "exact name of person/object/item/location (if applicable, not for REFLECT)",
-    "market": "exact name of market (only if BUY)",
-    "speech": "what you say out loud (only if TALK)",
+    "direction": "direction (only if MOVE)",
+    "target": "exact name of person/object/item/location (if applicable)",
+    "market": "market name (only if BUY)",
+    "speech": "what you say out loud (only if TALK, SHOUT, or PRAY)",
     "offer": "item you offer (only if TRADE)",
     "want": "item you want (only if TRADE)",
-    "item": "weapon from INVENTORY (only if ATTACK) or item to give (only if GIVE)",
+    "item": "weapon from INVENTORY (ATTACK) or item to give (GIVE)",
     "note": "free-text note to remember (only if REFLECT)"
 }}/no_think"""
 
+
+# ============================================================
+# Main builder
+# ============================================================
+
 def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
                  economy: Any = None) -> str:
+    """Assemble the full prompt for one LLM inference.
+
+    Section order:
+      SYSTEM → YOUR STATE → THE WORLD → [MARKET] → [CONVERSATION]
+             → RECENT PAST → YOUR MIND → YOUR CONSCIENCE → CHOOSE ACTION
+    """
     persona = agent.personality_seed
 
+    # ------------------------------------------------------------------
+    # Zone 1: WHO YOU ARE — system prompt
+    # ------------------------------------------------------------------
     personality_parts = []
     if persona.get("motivation"):
         personality_parts.append(f"Core motivation: {persona['motivation']}")
@@ -169,54 +192,69 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         fears_block="\n".join(f"- {f}" for f in fears),
     )
 
+    # ------------------------------------------------------------------
+    # Zone 2: YOUR STATE — body + current action + inventory
+    # ------------------------------------------------------------------
     health_warning = ""
     if agent.health < 20:
-        health_warning = " ⚠ CRITICAL — YOU ARE DYING"
+        health_warning = " ⚠ DYING"
     elif agent.health < 50:
         health_warning = " ⚠ WOUNDED"
 
-    self_assessment_parts = []
+    # Physical self-assessment (visceral description, not ⚠ commands — those go in CONSCIENCE)
+    feel_parts = []
     if agent.health < 20:
-        self_assessment_parts.append("⚠ CRITICAL: You are gravely injured. Your vision blurs and your body screams in pain. You could die without help.")
+        feel_parts.append("Gravely injured — vision blurs, pain everywhere.")
     elif agent.health < 50:
-        self_assessment_parts.append("You are wounded and in pain. Moving is difficult.")
+        feel_parts.append("Wounded and in pain.")
 
     sensation_text = agent.status_effects.get_sensation_summary()
     if sensation_text:
-        self_assessment_parts.append(sensation_text)
+        feel_parts.append(sensation_text)
 
     if agent.drives["thirst"] > 80:
-        self_assessment_parts.append("Your throat is parched and cracked. You MUST find water soon or you will collapse.")
+        feel_parts.append("Throat cracked — desperately thirsty.")
     elif agent.drives["thirst"] > 60:
-        self_assessment_parts.append("Your mouth is dry. You need water.")
+        feel_parts.append("Dry mouth, growing thirst.")
 
     if agent.drives["hunger"] > 80:
-        self_assessment_parts.append("Your stomach cramps with hunger. You feel weak and dizzy.")
+        feel_parts.append("Stomach cramps, dizzy from hunger.")
     elif agent.drives["hunger"] > 60:
-        self_assessment_parts.append("You are very hungry. Your stomach growls audibly.")
+        feel_parts.append("Hungry, stomach growling.")
 
     if agent.drives["energy"] > 80:
-        self_assessment_parts.append("You can barely keep your eyes open. Your body begs for rest.")
+        feel_parts.append("Exhausted — barely keeping eyes open.")
+    elif agent.drives["energy"] > 65:
+        feel_parts.append("Tired, limbs heavy.")
 
     if agent.drives["comfort"] > 70:
-        self_assessment_parts.append("You feel deeply miserable and uncomfortable.")
+        feel_parts.append("Deeply uncomfortable and miserable.")
 
     if agent.drives["social"] > 70:
-        self_assessment_parts.append("A profound loneliness gnaws at you. You crave human connection.")
+        feel_parts.append("Lonely — craving company.")
 
-    if not self_assessment_parts:
-        self_assessment_parts.append("You feel normal. No ailments.")
+    if not feel_parts:
+        feel_parts.append("Fine. No ailments.")
 
-    self_assessment = "\n".join(self_assessment_parts)
+    self_assessment = " | ".join(feel_parts)
 
-    # Active status effects block (empty string if none)
+    mood_text = agent.memory.get_mood_summary()
+    mood_line = f" | {mood_text}" if mood_text else ""
+
     if agent.status_effects.active:
         effects_list = ", ".join(e.name for e in agent.status_effects.active)
-        status_effects_block = f"\nActive conditions: {effects_list}"
+        status_effects_block = f"\nConditions: {effects_list}"
     else:
         status_effects_block = ""
 
-    status = STATUS_TEMPLATE.format(
+    current_action = _get_current_action_desc(agent)
+    last_thought = "..."
+    if agent.decision_history:
+        raw = agent.decision_history[-1].get("thought", "").strip()
+        if raw:
+            last_thought = raw[:200]
+
+    now_you = NOW_YOU_TEMPLATE.format(
         current_tick=agent.sim_tick,
         position=_get_position_desc(agent),
         health=int(agent.health),
@@ -225,60 +263,29 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         denarii=agent.denarii,
         drives_summary=agent.get_drives_summary(),
         status_effects_block=status_effects_block,
+        self_assessment=self_assessment,
+        mood_line=mood_line,
+        current_action=current_action,
+        last_thought=last_thought,
         inventory_summary=agent.get_inventory_summary(),
     )
 
-    urgency_hints = _build_urgency_hint(agent, agents)
-    mood_text = agent.memory.get_mood_summary()
-    mood_line = f"\n{mood_text}" if mood_text else ""
-    condition = CONDITION_TEMPLATE.format(
-        self_assessment=self_assessment,
-        mood_line=mood_line,
-        urgency_hints=urgency_hints,
-    )
-
-    trends = TRENDS_TEMPLATE.format(
-        past_states=agent.get_past_states_summary(n=PROMPT_STATE_TRENDS_N),
-    )
-
-    # Throttle verbose environment: show full prose every PROMPT_ENV_INTERVAL LLM calls
+    # ------------------------------------------------------------------
+    # Zone 3: THE WORLD — perception + market + conversation
+    # ------------------------------------------------------------------
     llm_decision_count = sum(1 for d in agent.decision_history if d.get("source") == "llm")
     include_environment = (llm_decision_count % PROMPT_ENV_INTERVAL == 0)
     perception_text = agent.perceive(world, agents, include_environment=include_environment)
-    perception = PERCEPTION_TEMPLATE.format(perception_text=perception_text)
 
-    reflections = agent.memory.get_reflections()
-    prefs = agent.memory.get_preferences_summary()
-    memory = MEMORY_TEMPLATE.format(
-        recent_memories=agent.memory.get_recent_context(n=PROMPT_RECENT_MEMORIES_N),
-        important_memories=agent.memory.get_important_memories(n=PROMPT_IMPORTANT_MEMORIES_N),
-        reflections=reflections if reflections else "You haven't noted anything yet.",
-        relationships=agent.memory.get_relationship_summary(),
-        beliefs=agent.memory.get_beliefs_summary(),
-        known_locations=agent.memory.get_known_locations_summary(),
-        preferences=prefs if prefs else "You have no strong preferences yet.",
-    )
+    now_world = NOW_WORLD_TEMPLATE.format(perception_text=perception_text)
 
-    action = ACTION_TEMPLATE.format()
-
-    # Decision history — tells the LLM what the agent did recently
-    decision_history_text = agent.get_decision_history_summary(n=PROMPT_DECISION_HISTORY_N)
-    decision_history = DECISION_HISTORY_TEMPLATE.format(
-        decision_history=decision_history_text,
-    )
-
-    # New section order: IDENTITY → BODY → CONDITION → TRENDS → WORLD → [MARKET] → MIND → HISTORY → [MESSAGE] → DECIDE
-    sections = [system, status, condition, trends, perception]
+    world_extras: List[str] = []
     if economy is not None:
         market_listings = _get_nearby_market_listings(agent, world, economy)
         if market_listings:
-            sections.append(MARKET_TEMPLATE.format(market_listings=market_listings))
-    outcomes_text = agent.memory.get_recent_outcomes(n=PROMPT_OUTCOMES_N)
-    outcomes = OUTCOMES_TEMPLATE.format(outcomes=outcomes_text)
-    sections += [memory, decision_history, outcomes]
+            world_extras.append(MARKET_BLOCK_TEMPLATE.format(market_listings=market_listings))
 
-    # Incoming speech — surfaced as explicit context so the agent can
-    # freely decide whether to respond, ignore, or do something else.
+    # Incoming conversation — it's happening RIGHT NOW, so it belongs in the world zone
     pending = agent._pending_conversation
     if pending:
         incoming = INCOMING_MESSAGE_TEMPLATE.format(
@@ -287,16 +294,88 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
             relationship=_get_relationship_desc(agent, pending["speaker"]),
             convo_history=agent.memory.get_conversation_context(pending["speaker"]),
         )
-        sections.append(incoming)
+        world_extras.append(incoming)
 
-    # Anti-stagnation spark — always injected last, right before the action block
-    spark_text = _build_spark(agent, agents, world)
-    sections.append(spark_text)
-    sections.append(action)
+    # ------------------------------------------------------------------
+    # Zone 4: RECENT PAST — what you did + what happened + drive trends
+    # ------------------------------------------------------------------
+    decision_history_text = agent.get_decision_history_summary(n=PROMPT_DECISION_HISTORY_N)
+    outcomes_text = agent.memory.get_recent_outcomes(n=PROMPT_OUTCOMES_N)
+    past_states_text = agent.get_past_states_summary(n=PROMPT_STATE_TRENDS_N)
+
+    past = PAST_TEMPLATE.format(
+        decision_history=decision_history_text,
+        outcomes=outcomes_text,
+        past_states=past_states_text,
+    )
+
+    # ------------------------------------------------------------------
+    # Zone 5: YOUR MIND — memories, knowledge, relationships
+    # ------------------------------------------------------------------
+    reflections = agent.memory.get_reflections()
+    prefs = agent.memory.get_preferences_summary()
+    mind = MIND_TEMPLATE.format(
+        important_memories=agent.memory.get_important_memories(n=PROMPT_IMPORTANT_MEMORIES_N),
+        recent_memories=agent.memory.get_recent_context(n=PROMPT_RECENT_MEMORIES_N),
+        reflections=reflections if reflections else "None yet.",
+        relationships=agent.memory.get_relationship_summary(),
+        beliefs=agent.memory.get_beliefs_summary(),
+        known_locations=agent.memory.get_known_locations_summary(),
+        preferences=prefs if prefs else "No strong preferences yet.",
+    )
+
+    # ------------------------------------------------------------------
+    # Zone 6: YOUR CONSCIENCE — urgency warnings first, then coaching
+    # ------------------------------------------------------------------
+    conscience_text = _build_conscience(agent, agents, world)
+
+    # ------------------------------------------------------------------
+    # Assemble
+    # ------------------------------------------------------------------
+    action = ACTION_TEMPLATE.format()
+
+    sections = [system, now_you, now_world]
+    sections.extend(world_extras)
+    sections += [past, mind, conscience_text, action]
     print("\n\n".join(sections))
     return "\n\n".join(sections)
 
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def _get_current_action_desc(agent: Any) -> str:
+    """Human-readable description of what the agent is currently doing."""
+    import math as _math
+    action = agent.action.upper()
+
+    if action in ("MOVING", "GOTO"):
+        dest = agent.autopilot.destination_name
+        if dest:
+            loc = agent.memory.known_locations.get(dest)
+            if loc:
+                dist = int(_math.sqrt((loc[0] - agent.x) ** 2 + (loc[1] - agent.y) ** 2))
+                return f"Walking to {dest} ({dist} tiles away)"
+            return f"Walking to {dest}"
+        return "Moving"
+
+    readable = {
+        "IDLE":        "Standing still (idle)",
+        "WORKING":     "Working",
+        "TRADING":     "Trading",
+        "TALKING":     "In conversation",
+        "SLEEPING":    "Sleeping",
+        "RESTING":     "Resting",
+        "INTERACTING": "Interacting with something",
+        "ATTACKING":   "Fighting",
+        "DEAD":        "Dead",
+    }
+    return readable.get(action, action.capitalize())
+
+
 def _build_urgency_hint(agent: Any, agents: List[Any] = None) -> str:
+    """Return ⚠ warning lines for life-threatening situations. Empty string if safe."""
     hints: List[str] = []
     if agent.health < 20:
         hints.append("⚠ YOU ARE CRITICALLY INJURED. Your survival depends on your next action.")
@@ -305,7 +384,7 @@ def _build_urgency_hint(agent: Any, agents: List[Any] = None) -> str:
     if agent.status_effects.has_effect("Smoke Inhalation"):
         hints.append("⚠ You are choking on SMOKE. Move to clear air immediately.")
     if agent.drives["thirst"] > 80:
-        hints.append("⚠ You are desperately THIRSTY. Find water or you will die.")
+        hints.append("⚠ You are desperately THIRSTY. Find water now or you will die.")
     if agent.drives["hunger"] > 80:
         hints.append("⚠ You are STARVING. Find food urgently.")
     if agent.status_effects.has_effect("Food Poisoning"):
@@ -325,18 +404,132 @@ def _build_urgency_hint(agent: Any, agents: List[Any] = None) -> str:
                 continue
             if a.action in ("ATTACKING", "HUNTING", "CHARGING"):
                 hints.append(f"⚠ DANGER: A {a.animal_type} is {a.action.lower()} nearby!")
-                break  # one warning is enough
+                break
 
     if not hints:
         return ""
-    return "\n" + "\n".join(hints) + "\n"
+    return "\n".join(hints)
+
+
+def _build_conscience(agent: Any, agents: List[Any], world: Any) -> str:
+    """Build Zone 6: urgency warnings + stagnation detection + opportunity hints + vita activa."""
+    import math as _math
+    from roma_aeterna.config import PERCEPTION_RADIUS
+
+    lines: List[str] = []
+
+    # ------------------------------------------------------------------
+    # 1. Urgency warnings — first and loudest if anything is critical
+    # ------------------------------------------------------------------
+    urgency = _build_urgency_hint(agent, agents)
+    if urgency:
+        lines.append(urgency)
+
+    # ------------------------------------------------------------------
+    # 2. Stagnation detection — what has the agent been doing?
+    # ------------------------------------------------------------------
+    history = agent.decision_history[-10:] if agent.decision_history else []
+    recent5  = [d.get("action", "IDLE").upper() for d in history[-5:]]
+    recent10 = [d.get("action", "IDLE").upper() for d in history]
+
+    idle_count = sum(1 for a in recent5 if a == "IDLE")
+    rest_count = sum(1 for a in recent5 if a in ("REST", "SLEEP"))
+    all_same   = (len(set(recent5)) == 1 and len(recent5) == 5
+                  and recent5[0] not in ("MOVE", "MOVING"))
+    goto_count = sum(1 for a in recent5 if a == "GOTO")
+
+    if idle_count >= 3:
+        lines.append(
+            f"You have chosen IDLE {idle_count} times in your last 5 actions. "
+            "This is unacceptable. Choose a meaningful action this turn — not IDLE, not REST."
+        )
+    elif goto_count >= 3:
+        lines.append(
+            f"You have chosen GOTO {goto_count} times in a row without arriving anywhere. "
+            "The path may be blocked. Try a different action: MOVE in a direction manually, "
+            "INTERACT with something nearby, or choose a completely different goal."
+        )
+    elif rest_count >= 3:
+        lines.append(
+            "You have been resting far too long. Your body has recovered. "
+            "Rise and do something — the world will not wait."
+        )
+    elif all_same:
+        lines.append(
+            f"You keep choosing {recent5[0]} over and over. Pick a completely different action."
+        )
+    elif idle_count >= 1 and rest_count >= 1:
+        lines.append(
+            "You have been passive — idling and resting without purpose. A Roman does not squander their hours."
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Situational opportunity hints — up to 2, most relevant first
+    # ------------------------------------------------------------------
+    hints: List[str] = []
+
+    nearby_humans = [
+        a for a in agents
+        if (a.uid != agent.uid and a.is_alive
+            and not getattr(a, "is_animal", False)
+            and _math.sqrt((a.x - agent.x) ** 2 + (a.y - agent.y) ** 2) <= PERCEPTION_RADIUS)
+    ]
+    recent_social = sum(1 for a in recent10 if a in ("TALK", "TRADE", "GIVE", "SHOUT"))
+    if nearby_humans and recent_social == 0:
+        names = ", ".join(a.name for a in nearby_humans[:2])
+        hints.append(
+            f"→ {names} {'is' if len(nearby_humans) == 1 else 'are'} nearby and you haven't spoken "
+            f"to anyone recently. TALK, GIVE something, or TRADE."
+        )
+
+    food_items = [i for i in agent.inventory if getattr(i, "item_type", None) in ("food", "drink")]
+    if food_items and (agent.drives.get("hunger", 0) > 45 or agent.drives.get("thirst", 0) > 45):
+        hints.append(
+            f"→ You carry {food_items[0].name} and you are hungry or thirsty. "
+            f"CONSUME it — no reason to suffer with food in hand."
+        )
+
+    if agent.denarii >= 8 and not any(a in recent10 for a in ("BUY", "TRADE", "GIVE")):
+        hints.append(
+            f"→ You have {agent.denarii} denarii sitting unused. "
+            "Visit a market to BUY supplies, or GIVE some to someone in need."
+        )
+
+    creative = {"INSPECT", "REFLECT", "PRAY", "INTERACT", "SHOUT", "WORK"}
+    if not any(a in creative for a in recent10):
+        if any("temple" in loc.lower() for loc in agent.memory.known_locations):
+            hints.append(
+                "→ You haven't used a temple, inspected anything, worked, or reflected recently. "
+                "PRAY at a temple, INSPECT something, WORK at a nearby building, or REFLECT."
+            )
+        else:
+            hints.append(
+                "→ You haven't inspected, reflected, shouted, or interacted with the world recently. "
+                "INSPECT something nearby, SHOUT to the crowd, or REFLECT on your situation."
+            )
+
+    if agent.memory.known_locations and not any(a in recent10 for a in ("GOTO",)):
+        loc_name = next(iter(agent.memory.known_locations))
+        hints.append(f"→ You know where {loc_name} is. GOTO it and see what awaits you there.")
+
+    for h in hints[:2]:
+        lines.append(h)
+
+    # ------------------------------------------------------------------
+    # 4. Vita activa — always present, always last
+    # ------------------------------------------------------------------
+    lines.append(
+        "You are a living person in Rome. Every moment matters. "
+        "Use the full range of your actions: GOTO to explore, TALK to connect, PRAY to worship, "
+        "REFLECT to remember, INSPECT to learn, SHOUT to be heard, GIVE to show generosity, WORK to earn. "
+        "IDLE is your last resort — almost never the right choice."
+    )
+
+    return CONSCIENCE_TEMPLATE.format(body="\n".join(lines))
+
 
 def _get_nearby_market_listings(agent: Any, world: Any, economy: Any) -> str:
-    """Return goods listings for all trade buildings within perception range.
-
-    Shows price and stock so the agent can make an informed BUY decision
-    without needing a separate INTERACT action.
-    """
+    """Return goods listings for all trade buildings within perception range."""
     import math
     from roma_aeterna.config import PERCEPTION_RADIUS
     from roma_aeterna.world.components import Interactable
@@ -359,6 +552,7 @@ def _get_nearby_market_listings(agent: Any, world: Any, economy: Any) -> str:
 
     return "\n\n".join(listings)
 
+
 def _get_position_desc(agent: Any) -> str:
     """Return grid coords plus the nearest known landmark (if within 20 tiles)."""
     import math as _math
@@ -372,135 +566,6 @@ def _get_position_desc(agent: Any) -> str:
     if nearest_name and nearest_dist < 20:
         return f"{pos} — near {nearest_name} ({int(nearest_dist)} tiles away)"
     return pos
-
-
-def _build_spark(agent: Any, agents: List[Any], world: Any) -> str:
-    """Build a dynamic anti-stagnation section injected just before the action block.
-
-    Detects repetitive / passive behavior from decision history and generates
-    targeted, concrete suggestions the agent can act on immediately.
-    The section is always present — the standing reminder alone is worth the tokens.
-    """
-    import math as _math
-    from roma_aeterna.config import PERCEPTION_RADIUS
-
-    lines: List[str] = []
-
-    # ----------------------------------------------------------------
-    # 1. Stagnation detection — what has the agent been doing?
-    # ----------------------------------------------------------------
-    history = agent.decision_history[-10:] if agent.decision_history else []
-    recent5 = [d.get("action", "IDLE").upper() for d in history[-5:]]
-    recent10 = [d.get("action", "IDLE").upper() for d in history]
-
-    idle_count  = sum(1 for a in recent5 if a == "IDLE")
-    rest_count  = sum(1 for a in recent5 if a in ("REST", "SLEEP"))
-    move_only   = recent5 and all(a in ("MOVE", "GOTO", "MOVING") for a in recent5)
-    all_same    = (len(set(recent5)) == 1 and len(recent5) == 5
-                   and recent5[0] not in ("MOVE", "GOTO", "MOVING"))
-
-    if idle_count >= 3:
-        lines.append(
-            f"⚠ You have chosen IDLE {idle_count} times in your last 5 actions. "
-            "This is unacceptable. You MUST choose a meaningful action this turn — "
-            "not IDLE, not REST. Something real."
-        )
-    elif rest_count >= 3:
-        lines.append(
-            "You have been resting far too long. Your body has recovered. "
-            "Rise and do something productive — the world will not wait for you."
-        )
-    elif all_same:
-        lines.append(
-            f"You keep choosing {recent5[0]} over and over. The world changes — so must you. "
-            "Pick a completely different action this turn."
-        )
-    elif idle_count >= 1 and rest_count >= 1:
-        lines.append(
-            "You have been passive — idling and resting without purpose. "
-            "A Roman does not squander their hours. Act."
-        )
-
-    # ----------------------------------------------------------------
-    # 2. Situational opportunity hints — up to 2, most relevant first
-    # ----------------------------------------------------------------
-    hints: List[str] = []
-
-    # Nearby people — social opportunity
-    nearby_humans = [
-        a for a in agents
-        if (a.uid != agent.uid and a.is_alive
-            and not getattr(a, "is_animal", False)
-            and _math.sqrt((a.x - agent.x) ** 2 + (a.y - agent.y) ** 2) <= PERCEPTION_RADIUS)
-    ]
-    recent_social = sum(
-        1 for a in recent10
-        if a in ("TALK", "TRADE", "GIVE", "SHOUT")
-    )
-    if nearby_humans and recent_social == 0:
-        names = ", ".join(a.name for a in nearby_humans[:2])
-        hints.append(
-            f"→ {names} {'is' if len(nearby_humans) == 1 else 'are'} nearby and you haven't "
-            f"spoken to anyone recently. TALK, GIVE something, or TRADE."
-        )
-
-    # Has food/drink + hungry/thirsty → consume
-    food_items = [i for i in agent.inventory
-                  if getattr(i, "item_type", None) in ("food", "drink")]
-    if food_items:
-        if agent.drives.get("hunger", 0) > 45 or agent.drives.get("thirst", 0) > 45:
-            hints.append(
-                f"→ You carry {food_items[0].name} and you are hungry or thirsty. "
-                f"CONSUME it — there is no reason to suffer with food in hand."
-            )
-
-    # Has denarii — prompt spending/giving
-    if agent.denarii >= 8 and not any(a in recent10 for a in ("BUY", "TRADE", "GIVE")):
-        hints.append(
-            f"→ You have {agent.denarii} denarii sitting unused. "
-            "Visit a market to BUY supplies, or GIVE some to someone in need."
-        )
-
-    # Hasn't explored / used creative actions lately
-    creative = {"INSPECT", "REFLECT", "PRAY", "INTERACT", "SHOUT", "WORK"}
-    if not any(a in creative for a in recent10):
-        # Pick a specific suggestion based on what's visible
-        if any("temple" in loc.lower() for loc in agent.memory.known_locations):
-            hints.append(
-                "→ You haven't used a temple, inspected anything, worked, or reflected recently. "
-                "PRAY at a temple, INSPECT something nearby, WORK if a workplace is close, "
-                "or REFLECT to record your thoughts."
-            )
-        else:
-            hints.append(
-                "→ You haven't inspected, reflected, shouted, or interacted with the world recently. "
-                "INSPECT a building or person nearby, SHOUT something to the crowd, "
-                "or REFLECT on your current situation and plans."
-            )
-
-    # Known locations not visited → nudge exploration
-    if agent.memory.known_locations and not any(a in recent10 for a in ("GOTO",)):
-        loc_name = next(iter(agent.memory.known_locations))
-        hints.append(
-            f"→ You know where {loc_name} is. GOTO it and see what you find there."
-        )
-
-    for h in hints[:2]:
-        lines.append(h)
-
-    # ----------------------------------------------------------------
-    # 3. Standing vita activa reminder — always present, always last
-    # ----------------------------------------------------------------
-    lines.append(
-        "You are a living person in Rome. Every turn is precious. "
-        "Use the FULL range of your actions: explore with GOTO, start conversations with TALK, "
-        "worship with PRAY, record thoughts with REFLECT, examine the world with INSPECT, "
-        "warn others with SHOUT, show generosity with GIVE, earn wages with WORK. "
-        "IDLE should be your absolute last resort — choose it only if there is genuinely "
-        "nothing else to do, which is almost never true in Rome."
-    )
-
-    return SPARK_TEMPLATE.format(body="\n".join(lines))
 
 
 def _get_relationship_desc(agent: Any, name: str) -> str:

@@ -307,18 +307,50 @@ class ActionExecutor:
             None,
         )
         if location:
+            # Try full A* first
             agent.autopilot._set_path_toward(
                 agent, location, target, self.engine.world
             )
-            agent.action = "MOVING"
-            agent.memory.add_event(
-                f"Set off toward {target}.", tick=tick, importance=1.0,
-            )
+            # If A* returned nothing (surrounded or target unreachable), try a
+            # direct N-step walk in the raw direction — better than nothing.
+            if not agent.autopilot.path:
+                agent.autopilot._set_path_direct(
+                    agent, location, target, self.engine.world, n=20
+                )
+
+            if agent.autopilot.path:
+                agent.action = "MOVING"
+                agent.memory.add_event(
+                    f"Set off toward {target}.", tick=tick, importance=1.0,
+                )
+            else:
+                # Path completely blocked — give honest feedback so the LLM
+                # doesn't keep looping on the same failed GOTO.
+                # Suppress duplicates to avoid flooding memory.
+                already_noted = any(
+                    target.lower() in m.text.lower() and "blocked" in m.text
+                    for m in agent.memory.short_term[-4:]
+                )
+                if not already_noted:
+                    agent.memory.add_event(
+                        f"Tried to go to {target} but the way is completely "
+                        f"blocked from here. Cannot find a route.",
+                        tick=tick, importance=1.5, tags=["blocked"],
+                    )
+                agent.action = "IDLE"
         else:
-            agent.memory.add_event(
-                f"Wanted to go to {target} but don't know where it is.",
-                tick=tick, importance=1.0, tags=["blocked"],
+            # Suppress duplicate "don't know where X is" events — they flood
+            # short-term memory and evict useful context.
+            already_noted = any(
+                target.lower() in m.text.lower() and "don't know" in m.text
+                for m in agent.memory.short_term[-4:]
             )
+            if not already_noted:
+                agent.memory.add_event(
+                    f"Wanted to go to {target} but its location is unknown. "
+                    f"Ask someone nearby (TALK) or explore to find it.",
+                    tick=tick, importance=1.0, tags=["blocked"],
+                )
             agent.action = "IDLE"
 
     def _handle_work(self, agent: Any, decision: Dict, tick: int) -> None:

@@ -33,6 +33,7 @@ from roma_aeterna.config import (
     ATTACK_PROXIMITY_RADIUS,
 )
 from .pathfinding import Pathfinder
+from .constants import DIRECTION_DELTAS
 
 
 class AutopilotState(Enum):
@@ -413,6 +414,32 @@ class Autopilot:
         path = Pathfinder.find_path(
             (int(agent.x), int(agent.y)), target, world
         )
+        if path:
+            self.set_path(path, name)
+
+    def _set_path_direct(self, agent: Any, target: Tuple[int, int],
+                         name: str, world: Any, n: int = 20) -> None:
+        """Fallback: walk up to n tiles straight toward target — no obstacle avoidance.
+
+        Used when A* returns an empty path (e.g. target tile is inside a building
+        and every neighbouring tile explored by A* was also blocked).  This gives the
+        agent at least some forward motion rather than looping on failed GOTO.
+        Stops at the first unwalkable tile encountered.
+        """
+        cx, cy = int(agent.x), int(agent.y)
+        tx, ty = target
+        path: List[Tuple[int, int]] = []
+        for _ in range(n):
+            if cx == tx and cy == ty:
+                break
+            direction = self._direction_to(cx, cy, tx, ty)
+            dx, dy = DIRECTION_DELTAS[direction]
+            nx, ny = cx + dx, cy + dy
+            tile = world.get_tile(nx, ny)
+            if not tile or not tile.is_walkable:
+                break
+            path.append((nx, ny))
+            cx, cy = nx, ny
         if path:
             self.set_path(path, name)
 
