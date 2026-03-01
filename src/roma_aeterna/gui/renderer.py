@@ -484,54 +484,68 @@ class Renderer:
             if agent.action == "MOVING" and random.random() < 0.1:
                 self.particles.emit_dust(agent.x, agent.y + 0.5)
 
+    # Per-species palette: (body, outline, accent)
+    _ANIMAL_COLORS = {
+        "wolf":  ((35, 190, 175),  (15,  90,  85), (255, 80, 80)),   # teal; red when attacking
+        "dog":   ((215, 185,  45), (100, 80,  10), None),             # golden yellow
+        "boar":  ((220, 110,  25), (110, 50,   5), None),             # bright orange
+        "raven": ((175,  55, 220), ( 80, 20, 110), None),             # violet/magenta
+    }
+
     def _render_animal(self, agent, sx: int, sy: int, size: int) -> None:
         """Draw a species-specific sprite for an Animal."""
         cx = sx + size // 2
         cy = sy + size // 2
         atype = agent.animal_type
 
+        body_c, outline_c, attack_c = self._ANIMAL_COLORS.get(
+            atype, ((180, 180, 180), (80, 80, 80), None)
+        )
+
         if atype == "wolf":
-            # Elongated dark-grey body; turns brick-red when attacking
-            body_color = (140, 30, 30) if agent.action == "ATTACKING" else (75, 75, 80)
+            body_color = attack_c if agent.action == "ATTACKING" else body_c
             bw = max(3, size * 3 // 4)
             bh = max(2, size // 3)
-            pygame.draw.rect(self.screen, body_color,
-                             (cx - bw // 2, cy - bh // 2, bw, bh))
-            # Amber eyes
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_color, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
+            # Amber eyes at higher zoom
             if size >= 6:
                 eye_r = max(1, size // 8)
-                pygame.draw.circle(self.screen, (200, 160, 40),
+                pygame.draw.circle(self.screen, (240, 200, 50),
                                    (cx - bw // 4, cy - bh // 4), eye_r)
-                pygame.draw.circle(self.screen, (200, 160, 40),
+                pygame.draw.circle(self.screen, (240, 200, 50),
                                    (cx + bw // 4, cy - bh // 4), eye_r)
 
         elif atype == "dog":
             bw = max(2, size * 2 // 3)
             bh = max(2, size * 3 // 8)
-            pygame.draw.rect(self.screen, (140, 100, 60),
-                             (cx - bw // 2, cy - bh // 2, bw, bh))
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_c, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
 
         elif atype == "boar":
             bw = max(3, size * 4 // 5)
             bh = max(2, size * 2 // 5)
-            pygame.draw.rect(self.screen, (80, 55, 35),
-                             (cx - bw // 2, cy - bh // 2, bw, bh))
-            # Tiny white tusk lines at front-right
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_c, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
+            # Tusk lines at front-right
             if size >= 6:
                 tx = cx + bw // 2
-                pygame.draw.line(self.screen, (230, 225, 210),
+                pygame.draw.line(self.screen, (240, 235, 210),
                                  (tx, cy), (tx + max(1, size // 5), cy - max(1, size // 6)), 1)
-                pygame.draw.line(self.screen, (230, 225, 210),
+                pygame.draw.line(self.screen, (240, 235, 210),
                                  (tx, cy + 1), (tx + max(1, size // 5), cy + max(1, size // 5)), 1)
 
         elif atype == "raven":
-            # Small black diamond polygon
             r = max(2, size // 4)
             pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
-            pygame.draw.polygon(self.screen, (25, 20, 30), pts)
-            # Yellow beak dot
+            pygame.draw.polygon(self.screen, body_c, pts)
+            pygame.draw.polygon(self.screen, outline_c, pts, 1)
+            # Bright beak dot
             if size >= 5:
-                pygame.draw.circle(self.screen, (220, 200, 50),
+                pygame.draw.circle(self.screen, (240, 220, 60),
                                    (cx + r, cy), max(1, size // 8))
 
         # Health bar at zoom >= 2 if damaged
