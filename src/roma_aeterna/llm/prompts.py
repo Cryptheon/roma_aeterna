@@ -11,6 +11,7 @@ import random
 from roma_aeterna.config import (
     PROMPT_RECENT_MEMORIES_N, PROMPT_IMPORTANT_MEMORIES_N,
     PROMPT_DECISION_HISTORY_N, PROMPT_STATE_TRENDS_N, PROMPT_ENV_INTERVAL,
+    PROMPT_OUTCOMES_N,
 )
 from .personalities import assign_personality, ROLE_STARTING_INVENTORY
 
@@ -51,6 +52,9 @@ INVENTORY:
 CONDITION_TEMPLATE = """HOW YOU FEEL RIGHT NOW:
 {self_assessment}{urgency_hints}"""
 
+MARKET_TEMPLATE = """GOODS FOR SALE NEARBY:
+{market_listings}"""
+
 TRENDS_TEMPLATE = """STATE TRENDS (how your drives have changed):
 {past_states}"""
 
@@ -78,12 +82,6 @@ KNOWN LOCATIONS:
 YOUR PREFERENCES (Likes/Dislikes):
 {preferences}"""
 
-DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
-{decision_history}"""
-
-MARKET_TEMPLATE = """GOODS FOR SALE NEARBY:
-{market_listings}"""
-
 INCOMING_MESSAGE_TEMPLATE = """SOMEONE JUST SPOKE TO YOU:
 {speaker} said: "{message}"
 
@@ -92,6 +90,12 @@ Recent conversation history:
 {convo_history}
 
 You may respond with TALK, continue what you were doing, walk away, or do anything else. This is entirely your choice."""
+
+DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
+{decision_history}"""
+
+OUTCOMES_TEMPLATE = """WHAT RECENTLY HAPPENED (chronological — most recent at the bottom):
+{outcomes}"""
 
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
 Consider how you feel, what you see, your memories, and your personality.
@@ -109,6 +113,7 @@ Available actions:
 - REST: Stand still and catch your breath (light recovery).
 - SLEEP: Sleep deeply to restore energy fully (takes longer).
 - TRADE: Barter with a nearby person. Specify `target` (their name), `offer` (your item), `want` (their item).
+- ATTACK: Strike a nearby person. `target` MUST be a name from PEOPLE NEARBY. Optionally specify `item` (a weapon from your INVENTORY) — unarmed if omitted.
 - INSPECT: Examine something closely to learn more about it. Specify `target`.
 - REFLECT: Write a note to your long-term memory — use this as a scratchpad for anything you don't want to forget: plans, observations, people's secrets, prices you noticed, dangers to avoid, goals. Specify the note as `note` (free text, any length).
 - IDLE: Do nothing this turn.
@@ -256,7 +261,9 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         market_listings = _get_nearby_market_listings(agent, world, economy)
         if market_listings:
             sections.append(MARKET_TEMPLATE.format(market_listings=market_listings))
-    sections += [memory, decision_history]
+    outcomes_text = agent.memory.get_recent_outcomes(n=PROMPT_OUTCOMES_N)
+    outcomes = OUTCOMES_TEMPLATE.format(outcomes=outcomes_text)
+    sections += [memory, decision_history, outcomes]
 
     # Incoming speech — surfaced as explicit context so the agent can
     # freely decide whether to respond, ignore, or do something else.

@@ -323,6 +323,20 @@ class Memory:
             lines.append(f"- [Tick {tick}] {text}{suffix}")
         return "\n".join(lines)
 
+    def get_recent_outcomes(self, n: int = 8) -> str:
+        """Return the N most recent non-trivial events as a raw chronological log.
+
+        Unlike get_recent_context() this does NOT deduplicate by text — it preserves
+        the raw timeline so agents can read progression (e.g. "Set off toward X" →
+        several walk steps → "You have arrived near X"). Entries with importance <= 0.5
+        (walk noise) are excluded.
+        """
+        candidates = [m for m in self.short_term if m.importance > 0.5]
+        recent = candidates[-n:]   # oldest-to-newest slice from the tail
+        if not recent:
+            return "Nothing notable has happened yet."
+        return "\n".join(f"- [Tick {m.tick}] {m.text}" for m in recent)
+
     def get_important_memories(self, n: int = 3) -> str:
         """Return the N most important long-term memories."""
         if not self.long_term:

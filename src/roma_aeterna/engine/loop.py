@@ -22,7 +22,7 @@ from .chaos import ChaosEngine
 from roma_aeterna.core.events import EventBus, Event, EventType
 from roma_aeterna.engine.economy import EconomySystem
 from roma_aeterna.llm.worker import LLMWorker
-from roma_aeterna.config import TPS, AUTOSAVE_INTERVAL, LIF_ENV_UPDATE_INTERVAL
+from roma_aeterna.config import TPS, AUTOSAVE_INTERVAL, LIF_ENV_UPDATE_INTERVAL, DEAD_REMOVAL_DELAY
 
 
 class SimulationEngine:
@@ -124,7 +124,14 @@ class SimulationEngine:
                     continue
                 self._update_agent(agent, dt, weather_fx)
 
-            # --- 5. Autosave ---
+            # --- 5. Purge old corpses ---
+            if self.tick_count % 100 == 0:
+                self.agents = [
+                    a for a in self.agents
+                    if a.is_alive or (self.tick_count - a.death_tick) < DEAD_REMOVAL_DELAY
+                ]
+
+            # --- 6. Autosave ---
             if self.tick_count % AUTOSAVE_INTERVAL == 0:
                 self._autosave()
 

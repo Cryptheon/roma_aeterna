@@ -407,7 +407,19 @@ class Renderer:
         for agent in self.engine.agents:
             sx, sy = self.camera.apply(agent.x, agent.y)
             size = max(4, tile_px)
-            
+
+            if not agent.is_alive:
+                cx = sx + size // 2
+                cy = sy + size // 2
+                corpse_w = max(4, size * 2 // 3)
+                corpse_h = max(2, size // 4)
+                pygame.draw.rect(self.screen, (80, 60, 50),
+                                 (cx - corpse_w // 2, cy - corpse_h // 2, corpse_w, corpse_h))
+                if self.camera.zoom >= 2.0:
+                    label = self.font_label.render(f"{agent.name} (dead)", True, (120, 80, 60))
+                    self.screen.blit(label, (cx - label.get_width() // 2, cy - 12))
+                continue
+
             # Shadow
             shadow_surf = pygame.Surface((size, size // 3), pygame.SRCALPHA)
             pygame.draw.ellipse(shadow_surf, (0, 0, 0, 50),

@@ -59,6 +59,7 @@ class Agent:
         self.health: float = 100.0
         self.max_health: float = 100.0
         self.is_alive: bool = True
+        self.death_tick: int = -1
 
         # --- Personality (must be set before brain, which uses self.role) ---
         self.personality_seed: Dict[str, Any] = personality_seed or {}
@@ -160,6 +161,18 @@ class Agent:
         self.memory.add_belief("fire", "is extremely dangerous and spreads fast", 1.0, "common knowledge")
         self.memory.add_belief("the Tiber", "provides water but floods sometimes", 0.7, "common knowledge")
         self.memory.add_belief("fountains", "provide clean drinking water", 0.9, "common knowledge")
+
+    # ================================================================
+    # COMBAT
+    # ================================================================
+
+    def take_damage(self, amount: float) -> None:
+        """Apply direct damage and trigger death if HP hits zero."""
+        self.health = max(0.0, self.health - amount)
+        if self.health <= 0 and self.is_alive:
+            self.is_alive = False
+            self.action = "DEAD"
+            self.death_tick = int(self.current_time)
 
     # ================================================================
     # CONVERSATION — Incoming speech triggers responses

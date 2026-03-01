@@ -41,8 +41,8 @@ MEMORY_SHORT_TERM_CAP: int = 20
 MEMORY_LONG_TERM_CAP: int = 50
 
 # --- Agent Biology ---
-HUNGER_RATE: float = 0.08            # ~10 min to critical from 10
-THIRST_RATE: float = 0.10            # Slightly faster than hunger — thirst is more urgent
+HUNGER_RATE: float = 0.8            # ~10 min to critical from 10
+THIRST_RATE: float = 0.9            # Slightly faster than hunger — thirst is more urgent
 ENERGY_RATE: float = 0.015           # Tired after ~80 min
 SOCIAL_RATE: float = 0.06            # Lonely after ~15 min
 COMFORT_RATE: float = 0.02
@@ -79,6 +79,11 @@ ROUTINE_SOCIAL_THRESHOLD: float = 60.0  # Trigger greeting when someone is nearb
 HEALTH_CRITICAL_THRESHOLD: float = 25.0 # Use medicine from inventory
 PATHFINDING_MAX_STEPS: int = 100         # Greedy path steps — covers ~110 tiles diagonally
 PATHFINDING_ROAD_BIAS: float = 0.2      # Cost multiplier for road tiles (lower = preferred)
+
+# --- Combat ---
+UNARMED_DAMAGE: float = 5.0             # Base damage when attacking bare-handed
+ATTACK_PROXIMITY_RADIUS: float = 2.0   # Tiles within which ATTACK can reach a target
+DEAD_REMOVAL_DELAY: int = 3000         # Ticks before corpse is purged (~30s at TPS=100)
 
 # --- Proximity / Interaction Ranges ---
 NEARBY_AGENT_RADIUS: float = 5.0        # TRADE, BUY proximity, social checks
@@ -127,8 +132,11 @@ LIF_ENV_NIGHT_URGENCY: float = 1.0  # Flat urgency added when outdoors at night
 LIF_ENV_UPDATE_INTERVAL: int = 20   # Ticks between environmental urgency scans (~0.2s)
 
 # --- Prompt Context Sizes ---
-PROMPT_RECENT_MEMORIES_N: int = 20      # Recent memories shown to agent per LLM call
-PROMPT_IMPORTANT_MEMORIES_N: int = 10    # Important long-term memories shown
-PROMPT_DECISION_HISTORY_N: int = 10     # Recent actions shown in history
-PROMPT_STATE_TRENDS_N: int = 10          # Drive snapshots shown in trends
+PROMPT_RECENT_MEMORIES_N: int = 32      # Recent memories shown to agent per LLM call
+PROMPT_IMPORTANT_MEMORIES_N: int = 16    # Important long-term memories shown
+PROMPT_DECISION_HISTORY_N: int = 16     # Recent actions shown in history
+PROMPT_STATE_TRENDS_N: int = 16          # Drive snapshots shown in trends
 PROMPT_ENV_INTERVAL: int = 3            # Show full verbose environment every N LLM calls
+PROMPT_OUTCOMES_N: int = 8              # Events shown in the chronological outcome log
+DECISION_THOUGHT_TRUNCATE: int = 512    # Max chars for thought in decision history
+DECISION_SPEECH_TRUNCATE: int = 256     # Max chars for speech in decision history
