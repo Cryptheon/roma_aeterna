@@ -65,6 +65,7 @@ class Animal:
 
         self.action: str = "WANDERING"
         self.current_time: float = 0.0
+        self.sim_tick: int = 0      # Set by engine outer loop each tick
         self.last_speech: str = ""
 
         # LLM / autopilot shims — keep engine code happy
@@ -90,7 +91,7 @@ class Animal:
         if self.health <= 0.0 and self.is_alive:
             self.is_alive = False
             self.action = "DEAD"
-            self.death_tick = int(self.current_time)
+            self.death_tick = self.sim_tick
 
     def receive_speech(self, *args, **kwargs) -> None:
         """Animals ignore speech."""
@@ -242,7 +243,7 @@ class Animal:
         dominates the next LLM prompt. The LIF spike forces the brain to fire
         so the agent reacts this tick rather than waiting for the next cycle.
         """
-        tick = int(self.current_time)
+        tick = getattr(target, "sim_tick", 0)
         if hasattr(target, "memory"):
             target.memory.add_event(
                 message,

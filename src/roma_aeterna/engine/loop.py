@@ -44,6 +44,8 @@ class SimulationEngine:
         self.paused: bool = False
         self.running: bool = True
         self.save_path: Optional[str] = save_path
+        self.pending_prayers: list = []  # [{agent_uid, agent_name, temple, prayer, tick}]
+        self.notifications: list = []   # [{text, category}] — drained by renderer each frame
 
         # Track previous time of day for dawn/dusk events
         self._prev_time_of_day: str = ""
@@ -124,6 +126,9 @@ class SimulationEngine:
             # --- 4. Agents ---
             weather_fx = self.weather.get_effects()
             for agent in self.agents:
+                # Sync engine tick onto every agent so base.py / autopilot.py
+                # can timestamp memory events consistently with action handlers.
+                agent.sim_tick = self.tick_count
                 if not agent.is_alive:
                     continue
                 if getattr(agent, "is_animal", False):
@@ -203,6 +208,11 @@ class SimulationEngine:
 
         did_fire = agent.update_biological(dt, weather_fx)
 
+        # Notify renderer when an agent dies from starvation/dehydration
+        if not agent.is_alive:
+            self.push_notification(f"☠ {agent.name} has perished!", "death")
+            return
+
         # --- Autopilot path-following (runs even without brain fire) ---
         if (agent.autopilot.path and
                 not did_fire and
@@ -267,6 +277,41 @@ class SimulationEngine:
     # ================================================================
     # QUERY METHODS
     # ================================================================
+
+    def push_notification(self, text: str, category: str = "info") -> None:
+        """Queue a UI notification for the renderer. Safe to call from any thread."""
+        self.notifications.append({"text": text, "category": category})
+        if len(self.notifications) > 50:
+            self.notifications.pop(0)
+
+    def deliver_divine_response(self, agent_uid: str, response: str) -> bool:
+        """Called by the renderer when the player submits a divine oracle response.
+
+        Injects the response as importance-7.0 memory and spikes the LIF
+        neuron so the agent reacts immediately on the next brain-fire cycle.
+        Returns True if the agent was found alive.
+        """
+        with self.lock:
+            agent = next(
+                (a for a in self.agents if a.uid == agent_uid and a.is_alive),
+                None,
+            )
+            if agent is None:
+                return False
+
+            agent.memory.add_event(
+                f"⚡ Jupiter has spoken: \"{response}\"",
+                tick=self.tick_count,
+                importance=7.0,
+                memory_type="observation",
+                tags=["divine", "jupiter", "oracle", "revelation"],
+            )
+            if agent.brain is not None:
+                agent.brain.potential += 20.0  # Force immediate LIF fire
+            self.push_notification(
+                f"⚡ Jupiter speaks to {agent.name}!", "divine"
+            )
+            return True
 
     def get_time_info(self) -> dict:
         return {

@@ -8,6 +8,7 @@ Each item has typed properties that affect agent drives when consumed.
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 import random
+from roma_aeterna.config import FOOD_SPOIL_RATE
 
 
 @dataclass
@@ -84,7 +85,7 @@ class ItemDatabase:
         if not item.spoilable:
             return
         heat_factor = max(1.0, (temperature - 15.0) / 10.0)
-        item.freshness -= 0.002 * dt * heat_factor
+        item.freshness -= FOOD_SPOIL_RATE * dt * heat_factor
         item.freshness = max(0.0, item.freshness)
 
     @staticmethod

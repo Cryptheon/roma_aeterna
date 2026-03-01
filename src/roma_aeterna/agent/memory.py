@@ -422,6 +422,25 @@ class Memory:
         notes.sort(key=lambda m: m.tick, reverse=True)
         return "\n".join(f"- {m.text}" for m in notes[:n])
 
+    def get_mood_summary(self, n: int = 10) -> str:
+        """Derive emotional tone from valence of recent memories.
+
+        Returns a human-readable sentence, or "" if mood is neutral.
+        """
+        recent = self.short_term[-n:] if len(self.short_term) >= n else self.short_term
+        if not recent:
+            return ""
+        avg = sum(m.valence for m in recent) / len(recent)
+        if avg > 0.4:
+            return "You feel cheerful and optimistic."
+        if avg > 0.15:
+            return "You feel reasonably content."
+        if avg < -0.4:
+            return "You feel deeply anxious and distressed."
+        if avg < -0.15:
+            return "You feel uneasy and troubled."
+        return ""  # neutral — don't clutter prompt
+
     def get_preferences_summary(self) -> str:
         """Summarize learned preferences for LLM context."""
         if not self.preferences:

@@ -42,6 +42,7 @@ RULES OF THE WORLD:
 - IMPORTANT: You must respond ONLY with valid JSON. No other text."""
 
 STATUS_TEMPLATE = """YOUR BODY (Tick {current_tick}):
+Position: {position}
 Health: {health}/{max_health}{health_warning}
 Denarii (money): {denarii}
 {drives_summary}{status_effects_block}
@@ -50,7 +51,7 @@ INVENTORY:
 {inventory_summary}"""
 
 CONDITION_TEMPLATE = """HOW YOU FEEL RIGHT NOW:
-{self_assessment}{urgency_hints}"""
+{self_assessment}{mood_line}{urgency_hints}"""
 
 MARKET_TEMPLATE = """GOODS FOR SALE NEARBY:
 {market_listings}"""
@@ -97,6 +98,9 @@ DECISION_HISTORY_TEMPLATE = """YOUR RECENT ACTIONS (what you did recently):
 OUTCOMES_TEMPLATE = """WHAT RECENTLY HAPPENED (chronological — most recent at the bottom):
 {outcomes}"""
 
+SPARK_TEMPLATE = """YOUR CONSCIENCE — READ THIS CAREFULLY:
+{body}"""
+
 ACTION_TEMPLATE = """DECIDE YOUR NEXT ACTION.
 Consider how you feel, what you see, your memories, and your personality.
 Available actions:
@@ -113,9 +117,12 @@ Available actions:
 - REST: Stand still and catch your breath (light recovery).
 - SLEEP: Sleep deeply to restore energy fully (takes longer).
 - TRADE: Barter with a nearby person. Specify `target` (their name), `offer` (your item), `want` (their item).
-- ATTACK: Strike a nearby person. `target` MUST be a name from PEOPLE NEARBY. Optionally specify `item` (a weapon from your INVENTORY) — unarmed if omitted.
+- ATTACK: Strike a nearby person or animal. `target` MUST be a name from PEOPLE NEARBY. Optionally specify `item` (a weapon from your INVENTORY) — unarmed if omitted.
+- GIVE: Give an item from your inventory to a nearby person — no reciprocation expected. `target` is their name, `item` is the item name from your INVENTORY.
+- SHOUT: Call out loudly so everyone nearby hears. Specify `speech`. Wider range than TALK — useful for warnings, calls for help, or public declarations.
 - INSPECT: Examine something closely to learn more about it. Specify `target`.
 - REFLECT: Write a note to your long-term memory — use this as a scratchpad for anything you don't want to forget: plans, observations, people's secrets, prices you noticed, dangers to avoid, goals. Specify the note as `note` (free text, any length).
+- PRAY: Address Jupiter at a nearby temple. `target` MUST be a temple name from STRUCTURES NEARBY. Specify your prayer as `speech` — a question, request, or plea. You may receive a divine response.
 - IDLE: Do nothing this turn.
 
 CRITICAL INSTRUCTIONS:
@@ -132,6 +139,7 @@ Respond with this EXACT format:
     "speech": "what you say out loud (only if TALK)",
     "offer": "item you offer (only if TRADE)",
     "want": "item you want (only if TRADE)",
+    "item": "weapon from INVENTORY (only if ATTACK) or item to give (only if GIVE)",
     "note": "free-text note to remember (only if REFLECT)"
 }}/no_think"""
 
@@ -209,7 +217,8 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         status_effects_block = ""
 
     status = STATUS_TEMPLATE.format(
-        current_tick=int(agent.current_time),
+        current_tick=agent.sim_tick,
+        position=_get_position_desc(agent),
         health=int(agent.health),
         max_health=int(agent.max_health),
         health_warning=health_warning,
@@ -219,9 +228,12 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         inventory_summary=agent.get_inventory_summary(),
     )
 
-    urgency_hints = _build_urgency_hint(agent)
+    urgency_hints = _build_urgency_hint(agent, agents)
+    mood_text = agent.memory.get_mood_summary()
+    mood_line = f"\n{mood_text}" if mood_text else ""
     condition = CONDITION_TEMPLATE.format(
         self_assessment=self_assessment,
+        mood_line=mood_line,
         urgency_hints=urgency_hints,
     )
 
@@ -277,11 +289,14 @@ def build_prompt(agent: Any, world: Any, agents: List[Any], weather: Any,
         )
         sections.append(incoming)
 
+    # Anti-stagnation spark — always injected last, right before the action block
+    spark_text = _build_spark(agent, agents, world)
+    sections.append(spark_text)
     sections.append(action)
     print("\n\n".join(sections))
     return "\n\n".join(sections)
 
-def _build_urgency_hint(agent: Any) -> str:
+def _build_urgency_hint(agent: Any, agents: List[Any] = None) -> str:
     hints: List[str] = []
     if agent.health < 20:
         hints.append("⚠ YOU ARE CRITICALLY INJURED. Your survival depends on your next action.")
@@ -297,6 +312,20 @@ def _build_urgency_hint(agent: Any) -> str:
         hints.append("⚠ You have FOOD POISONING. Rest and find clean water.")
     if agent.status_effects.has_effect("Heatstroke"):
         hints.append("⚠ You have HEATSTROKE. Find shade and water immediately.")
+
+    # Hostile animal proximity (scan within 12 tiles)
+    if agents:
+        import math as _math
+        DANGER_RADIUS = 12.0
+        for a in agents:
+            if not getattr(a, "is_animal", False) or not a.is_alive:
+                continue
+            dist = _math.sqrt((a.x - agent.x) ** 2 + (a.y - agent.y) ** 2)
+            if dist > DANGER_RADIUS:
+                continue
+            if a.action in ("ATTACKING", "HUNTING", "CHARGING"):
+                hints.append(f"⚠ DANGER: A {a.animal_type} is {a.action.lower()} nearby!")
+                break  # one warning is enough
 
     if not hints:
         return ""
@@ -329,6 +358,150 @@ def _get_nearby_market_listings(agent: Any, world: Any, economy: Any) -> str:
         listings.append(listing)
 
     return "\n\n".join(listings)
+
+def _get_position_desc(agent: Any) -> str:
+    """Return grid coords plus the nearest known landmark (if within 20 tiles)."""
+    import math as _math
+    pos = f"({int(agent.x)}, {int(agent.y)})"
+    nearest_name, nearest_dist = None, 999.0
+    for name, (lx, ly) in agent.memory.known_locations.items():
+        d = _math.sqrt((lx - agent.x) ** 2 + (ly - agent.y) ** 2)
+        if d < nearest_dist:
+            nearest_dist = d
+            nearest_name = name
+    if nearest_name and nearest_dist < 20:
+        return f"{pos} — near {nearest_name} ({int(nearest_dist)} tiles away)"
+    return pos
+
+
+def _build_spark(agent: Any, agents: List[Any], world: Any) -> str:
+    """Build a dynamic anti-stagnation section injected just before the action block.
+
+    Detects repetitive / passive behavior from decision history and generates
+    targeted, concrete suggestions the agent can act on immediately.
+    The section is always present — the standing reminder alone is worth the tokens.
+    """
+    import math as _math
+    from roma_aeterna.config import PERCEPTION_RADIUS
+
+    lines: List[str] = []
+
+    # ----------------------------------------------------------------
+    # 1. Stagnation detection — what has the agent been doing?
+    # ----------------------------------------------------------------
+    history = agent.decision_history[-10:] if agent.decision_history else []
+    recent5 = [d.get("action", "IDLE").upper() for d in history[-5:]]
+    recent10 = [d.get("action", "IDLE").upper() for d in history]
+
+    idle_count  = sum(1 for a in recent5 if a == "IDLE")
+    rest_count  = sum(1 for a in recent5 if a in ("REST", "SLEEP"))
+    move_only   = recent5 and all(a in ("MOVE", "GOTO", "MOVING") for a in recent5)
+    all_same    = (len(set(recent5)) == 1 and len(recent5) == 5
+                   and recent5[0] not in ("MOVE", "GOTO", "MOVING"))
+
+    if idle_count >= 3:
+        lines.append(
+            f"⚠ You have chosen IDLE {idle_count} times in your last 5 actions. "
+            "This is unacceptable. You MUST choose a meaningful action this turn — "
+            "not IDLE, not REST. Something real."
+        )
+    elif rest_count >= 3:
+        lines.append(
+            "You have been resting far too long. Your body has recovered. "
+            "Rise and do something productive — the world will not wait for you."
+        )
+    elif all_same:
+        lines.append(
+            f"You keep choosing {recent5[0]} over and over. The world changes — so must you. "
+            "Pick a completely different action this turn."
+        )
+    elif idle_count >= 1 and rest_count >= 1:
+        lines.append(
+            "You have been passive — idling and resting without purpose. "
+            "A Roman does not squander their hours. Act."
+        )
+
+    # ----------------------------------------------------------------
+    # 2. Situational opportunity hints — up to 2, most relevant first
+    # ----------------------------------------------------------------
+    hints: List[str] = []
+
+    # Nearby people — social opportunity
+    nearby_humans = [
+        a for a in agents
+        if (a.uid != agent.uid and a.is_alive
+            and not getattr(a, "is_animal", False)
+            and _math.sqrt((a.x - agent.x) ** 2 + (a.y - agent.y) ** 2) <= PERCEPTION_RADIUS)
+    ]
+    recent_social = sum(
+        1 for a in recent10
+        if a in ("TALK", "TRADE", "GIVE", "SHOUT")
+    )
+    if nearby_humans and recent_social == 0:
+        names = ", ".join(a.name for a in nearby_humans[:2])
+        hints.append(
+            f"→ {names} {'is' if len(nearby_humans) == 1 else 'are'} nearby and you haven't "
+            f"spoken to anyone recently. TALK, GIVE something, or TRADE."
+        )
+
+    # Has food/drink + hungry/thirsty → consume
+    food_items = [i for i in agent.inventory
+                  if getattr(i, "item_type", None) in ("food", "drink")]
+    if food_items:
+        if agent.drives.get("hunger", 0) > 45 or agent.drives.get("thirst", 0) > 45:
+            hints.append(
+                f"→ You carry {food_items[0].name} and you are hungry or thirsty. "
+                f"CONSUME it — there is no reason to suffer with food in hand."
+            )
+
+    # Has denarii — prompt spending/giving
+    if agent.denarii >= 8 and not any(a in recent10 for a in ("BUY", "TRADE", "GIVE")):
+        hints.append(
+            f"→ You have {agent.denarii} denarii sitting unused. "
+            "Visit a market to BUY supplies, or GIVE some to someone in need."
+        )
+
+    # Hasn't explored / used creative actions lately
+    creative = {"INSPECT", "REFLECT", "PRAY", "INTERACT", "SHOUT", "WORK"}
+    if not any(a in creative for a in recent10):
+        # Pick a specific suggestion based on what's visible
+        if any("temple" in loc.lower() for loc in agent.memory.known_locations):
+            hints.append(
+                "→ You haven't used a temple, inspected anything, worked, or reflected recently. "
+                "PRAY at a temple, INSPECT something nearby, WORK if a workplace is close, "
+                "or REFLECT to record your thoughts."
+            )
+        else:
+            hints.append(
+                "→ You haven't inspected, reflected, shouted, or interacted with the world recently. "
+                "INSPECT a building or person nearby, SHOUT something to the crowd, "
+                "or REFLECT on your current situation and plans."
+            )
+
+    # Known locations not visited → nudge exploration
+    if agent.memory.known_locations and not any(a in recent10 for a in ("GOTO",)):
+        loc_name = next(iter(agent.memory.known_locations))
+        hints.append(
+            f"→ You know where {loc_name} is. GOTO it and see what you find there."
+        )
+
+    for h in hints[:2]:
+        lines.append(h)
+
+    # ----------------------------------------------------------------
+    # 3. Standing vita activa reminder — always present, always last
+    # ----------------------------------------------------------------
+    lines.append(
+        "You are a living person in Rome. Every turn is precious. "
+        "Use the FULL range of your actions: explore with GOTO, start conversations with TALK, "
+        "worship with PRAY, record thoughts with REFLECT, examine the world with INSPECT, "
+        "warn others with SHOUT, show generosity with GIVE, earn wages with WORK. "
+        "IDLE should be your absolute last resort — choose it only if there is genuinely "
+        "nothing else to do, which is almost never true in Rome."
+    )
+
+    return SPARK_TEMPLATE.format(body="\n".join(lines))
+
 
 def _get_relationship_desc(agent: Any, name: str) -> str:
     rel = agent.memory.relationships.get(name)

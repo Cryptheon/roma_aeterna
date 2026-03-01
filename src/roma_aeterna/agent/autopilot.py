@@ -63,6 +63,7 @@ class Autopilot:
         self.destination_name = destination
         self.state = AutopilotState.NAVIGATING
         self._consecutive_path_blocks = 0
+        self.ticks_on_autopilot = 0  # Fresh novelty budget for this journey
 
     def clear_path(self) -> None:
         """Cancel current navigation."""
@@ -87,22 +88,27 @@ class Autopilot:
             self.ticks_on_autopilot = 0
             return None
 
-        # --- Novelty timeout: force LLM thinking periodically ---
-        self.ticks_on_autopilot += 1
-        if self.ticks_on_autopilot >= MAX_AUTOPILOT_TICKS:
-            self.ticks_on_autopilot = 0
-            return None  # Let the LLM re-evaluate
-
         # --- Priority 1: SURVIVAL (always handled by autopilot) ---
         survival = self._check_survival(agent, world, agents)
         if survival:
             return survival
 
         # --- Priority 2: Follow existing path ---
+        # Navigation is NEVER interrupted by the novelty timeout — the agent
+        # must complete its journey before the LLM re-evaluates.
         if self.path:
             nav = self._follow_path(agent, world)
             if nav:
                 return nav
+            # Path finished or was blocked — fall through to LLM immediately
+            # (don't burn a novelty-timeout slot for something that already resolved)
+
+        # --- Novelty timeout: force LLM thinking periodically ---
+        # Only applies when the agent is not mid-navigation.
+        self.ticks_on_autopilot += 1
+        if self.ticks_on_autopilot >= MAX_AUTOPILOT_TICKS:
+            self.ticks_on_autopilot = 0
+            return None  # Let the LLM re-evaluate
 
         # --- Priority 3: Critical needs ---
         need = self._check_critical_needs(agent, agents, world)
@@ -197,7 +203,7 @@ class Autopilot:
                 # Give the LLM context about where we ended up
                 agent.memory.add_event(
                     f"You have arrived near {dest}.",
-                    tick=int(agent.current_time), importance=1.5,
+                    tick=agent.sim_tick, importance=1.5,
                     memory_type="event",
                 )
                 return None  # Arrived — let LLM decide what to do here
@@ -214,7 +220,7 @@ class Autopilot:
             self.clear_path()
             agent.memory.add_event(
                 f"The path to {dest} is blocked. Need to find another route.",
-                tick=int(agent.current_time), importance=1.5,
+                tick=agent.sim_tick, importance=1.5,
                 memory_type="event", tags=["blocked"],
             )
             return None  # Path blocked — LLM re-evaluates
@@ -297,6 +303,22 @@ class Autopilot:
     def _check_routine(self, agent: Any, agents: List[Any],
                        world: Any) -> Optional[Dict]:
         """Handle routine, non-urgent behavior."""
+
+        # Avoid known hostile agents (trust < -50) — step away without LLM
+        for other in self._find_nearby_agents(agent, agents):
+            if getattr(other, "is_animal", False):
+                continue
+            rel = agent.memory.relationships.get(other.name)
+            if rel and rel.trust < -50:
+                away_dir = Pathfinder.direction_to(
+                    other.x, other.y, int(agent.x), int(agent.y)
+                )
+                return {
+                    "thought": f"{other.name} is hostile. I should move away.",
+                    "action": "MOVE",
+                    "direction": away_dir,
+                    "_autopilot": True,
+                }
 
         # Legionary formation cohesion — drift toward squad before anything else
         if "Legionary" in agent.role:

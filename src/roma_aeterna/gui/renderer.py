@@ -81,9 +81,17 @@ class Renderer:
         # --- Tick rate decoupling (sim @ TPS, render @ FPS) ---
         self._sim_accumulator = 0.0
         self._sim_dt = 1.0 / TPS
-        
+
         # Ambient animation timer
         self.anim_timer = 0.0
+
+        # --- Oracle modal (player responds to agent prayers) ---
+        self._active_prayer = None   # prayer dict currently shown to player
+        self._oracle_input = ""      # player's typed response
+        self._oracle_cursor_tick = 0  # blinking cursor animation counter
+
+        # --- Notification toasts ---
+        self._notifications: list = []  # [{text, color, age, lifetime}]
 
     def run(self):
         running = True
@@ -91,8 +99,48 @@ class Renderer:
             dt = self.clock.tick(FPS) / 1000.0
             self.anim_timer += dt
 
+            # Poll for new prayers (pick up at most one per frame)
+            if self._active_prayer is None and self.engine.pending_prayers:
+                with self.engine.lock:
+                    if self.engine.pending_prayers:
+                        self._active_prayer = self.engine.pending_prayers.pop(0)
+                self._oracle_input = ""
+
+            # Drain engine notification queue
+            if self.engine.notifications:
+                with self.engine.lock:
+                    while self.engine.notifications:
+                        n = self.engine.notifications.pop(0)
+                        self._add_notification(n["text"], n["category"])
+
+            # Age and expire toasts
+            self._notifications = [
+                n for n in self._notifications if n["age"] < n["lifetime"]
+            ]
+            for n in self._notifications:
+                n["age"] += dt
+
             mx, my = pygame.mouse.get_pos()
             for event in pygame.event.get():
+                # --- Oracle modal intercepts all input while active ---
+                if self._active_prayer is not None:
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_RETURN and self._oracle_input.strip():
+                            self.engine.deliver_divine_response(
+                                self._active_prayer["agent_uid"],
+                                self._oracle_input.strip(),
+                            )
+                            self._active_prayer = None
+                            self._oracle_input = ""
+                        elif event.key == pygame.K_ESCAPE:
+                            self._active_prayer = None
+                            self._oracle_input = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            self._oracle_input = self._oracle_input[:-1]
+                        elif event.unicode and len(self._oracle_input) < 300:
+                            self._oracle_input += event.unicode
+                    continue  # block all other events while modal is active
+
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
@@ -104,6 +152,16 @@ class Renderer:
                         else:
                             running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    # --- Minimap click → smooth camera pan ---
+                    _mm_rect = pygame.Rect(SCREEN_WIDTH - 150, 42, 140, 105)
+                    if event.button == 1 and _mm_rect.collidepoint(event.pos):
+                        _rel_x = event.pos[0] - (SCREEN_WIDTH - 150)
+                        _rel_y = event.pos[1] - 42
+                        _gx = _rel_x / 140 * GRID_WIDTH
+                        _gy = _rel_y / 105 * GRID_HEIGHT
+                        self.camera.center_on(_gx, _gy, instant=False)
+                        continue
+
                     # --- Context menu click handling ---
                     if self.context_menu_visible:
                         clicked_option = self._check_context_menu_click(event.pos)
@@ -678,8 +736,8 @@ class Renderer:
         self._draw_info_bar()
         self._draw_main_textbox()
         self._draw_minimap()
-        
-        # Draw the window if an agent is selected 
+
+        # Draw the window if an agent is selected
         if self.selected_agent:
             self._draw_agent_window(mx, my)
             self._draw_lif_monitor(self.selected_agent)
@@ -687,6 +745,13 @@ class Renderer:
             self._draw_context_menu()
         elif self.hovered_entity:
             self._draw_tooltip(mx, my)
+
+        # Notification toasts (above all other overlapping UI)
+        self._draw_notifications()
+
+        # Oracle modal is always drawn on top of everything
+        if self._active_prayer is not None:
+            self._draw_oracle_modal()
     
     def _draw_info_bar(self):
         bar_h = 32
@@ -1164,11 +1229,169 @@ class Renderer:
         pygame.draw.rect(mm_surf, (255, 255, 255, 150),
                          (vx1, vy1, vx2 - vx1, vy2 - vy1), 1)
         
-        # Agent dots
+        # Agent dots — blue for citizens, amber for animals, skip dead
         for agent in self.engine.agents:
+            if not agent.is_alive:
+                continue
             ax = int(agent.x * sx_scale)
             ay = int(agent.y * sy_scale)
             if 0 <= ax < mm_w and 0 <= ay < mm_h:
-                pygame.draw.circle(mm_surf, (255, 50, 50), (ax, ay), 2)
+                if getattr(agent, "is_animal", False):
+                    dot_color = (220, 155, 40)   # amber for animals
+                else:
+                    dot_color = (100, 185, 255)  # sky-blue for citizens
+                pygame.draw.circle(mm_surf, dot_color, (ax, ay), 2)
         
         self.screen.blit(mm_surf, (mm_x, mm_y))
+
+    # ================================================================
+    # NOTIFICATION TOASTS
+    # ================================================================
+
+    _NOTIF_COLORS = {
+        "death":    (220,  60,  40),
+        "violence": (215, 125,  30),
+        "divine":   (220, 195,  80),
+        "fire":     (255, 120,  20),
+        "info":     (170, 165, 130),
+    }
+
+    def _add_notification(self, text: str, category: str = "info") -> None:
+        """Enqueue a new toast. Oldest is dropped when the stack is full."""
+        color = self._NOTIF_COLORS.get(category, self._NOTIF_COLORS["info"])
+        lifetime = 5.5 if category in ("death", "divine") else 3.5
+        self._notifications.append({
+            "text": text,
+            "color": color,
+            "age": 0.0,
+            "lifetime": lifetime,
+        })
+        if len(self._notifications) > 6:
+            self._notifications.pop(0)
+
+    def _draw_notifications(self) -> None:
+        """Draw stacked toast notifications in the upper-left, below the info bar."""
+        if not self._notifications:
+            return
+
+        toast_w = 290
+        toast_h = 28
+        gap = 4
+        nx, ny = 10, 40   # top-left anchor, just under the info bar
+
+        for i, n in enumerate(self._notifications):
+            t, lt = n["age"], n["lifetime"]
+            # Fade in over 0.25 s, fade out over 0.9 s
+            if t < 0.25:
+                alpha = int(255 * (t / 0.25))
+            elif t > lt - 0.9:
+                alpha = int(255 * max(0.0, (lt - t) / 0.9))
+            else:
+                alpha = 255
+
+            color = n["color"]
+            text = n["text"]
+            if len(text) > 44:
+                text = text[:44] + "…"
+
+            # Background surface
+            toast = pygame.Surface((toast_w, toast_h), pygame.SRCALPHA)
+            toast.fill((14, 8, 4, min(210, alpha)))
+            pygame.draw.rect(toast, (*color, min(220, alpha)),
+                             (0, 0, toast_w, toast_h), 1)
+            # Left accent stripe
+            pygame.draw.rect(toast, (*color, min(255, alpha)),
+                             (0, 0, 3, toast_h))
+
+            # Text
+            txt_surf = self.font_body.render(text, True, color)
+            txt_surf.set_alpha(alpha)
+            toast.blit(txt_surf, (8, 6))
+
+            self.screen.blit(toast, (nx, ny + i * (toast_h + gap)))
+
+    def _draw_oracle_modal(self) -> None:
+        """Draw the divine oracle overlay when an agent's prayer awaits a response."""
+        sw, sh = self.screen.get_size()
+        prayer = self._active_prayer
+
+        # Semi-transparent full-screen overlay
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 190))
+        self.screen.blit(overlay, (0, 0))
+
+        # Modal box
+        bw, bh = 740, 440
+        bx, by = (sw - bw) // 2, (sh - bh) // 2
+        pygame.draw.rect(self.screen, (18, 10, 4), (bx, by, bw, bh))
+        pygame.draw.rect(self.screen, (180, 150, 60), (bx, by, bw, bh), 2)
+
+        pad = 24
+        y = by + pad
+
+        # Title
+        title_surf = self.font_title.render(
+            "A Prayer Reaches the Heavens", True, (220, 195, 80)
+        )
+        self.screen.blit(title_surf, (bx + pad, y))
+        y += self.font_title.get_height() + 8
+
+        # Divider
+        pygame.draw.line(self.screen, (120, 100, 40), (bx + pad, y), (bx + bw - pad, y))
+        y += 12
+
+        # Agent + temple header
+        header = f"{prayer['agent_name']} prays at {prayer['temple']}:"
+        self.screen.blit(
+            self.font_body.render(header, True, (190, 175, 130)),
+            (bx + pad, y),
+        )
+        y += self.font_body.get_height() + 6
+
+        # Prayer text — word-wrapped
+        prayer_words = prayer["prayer"].split()
+        line_words, lines = [], []
+        for word in prayer_words:
+            test = " ".join(line_words + [word])
+            if self.font_body.size(test)[0] > bw - pad * 2:
+                lines.append(" ".join(line_words))
+                line_words = [word]
+            else:
+                line_words.append(word)
+        if line_words:
+            lines.append(" ".join(line_words))
+
+        for ln in lines[:6]:
+            self.screen.blit(
+                self.font_body.render(ln, True, (220, 210, 170)),
+                (bx + pad, y),
+            )
+            y += self.font_body.get_height() + 2
+        y += 16
+
+        # Divider
+        pygame.draw.line(self.screen, (120, 100, 40), (bx + pad, y), (bx + bw - pad, y))
+        y += 12
+
+        # Prompt
+        self.screen.blit(
+            self.font_body.render(
+                "Speak as Jupiter (Enter to send, Esc to remain silent):",
+                True, (160, 145, 100),
+            ),
+            (bx + pad, y),
+        )
+        y += self.font_body.get_height() + 8
+
+        # Input box
+        ib_h = self.font_body.get_height() + 10
+        pygame.draw.rect(self.screen, (30, 18, 8), (bx + pad, y, bw - pad * 2, ib_h))
+        pygame.draw.rect(self.screen, (140, 120, 50), (bx + pad, y, bw - pad * 2, ib_h), 1)
+
+        # Blinking cursor
+        self._oracle_cursor_tick += 1
+        cursor = "|" if (self._oracle_cursor_tick // 30) % 2 == 0 else ""
+        self.screen.blit(
+            self.font_body.render(self._oracle_input + cursor, True, (240, 225, 160)),
+            (bx + pad + 4, y + 5),
+        )

@@ -149,6 +149,7 @@ class PerceptionSystem:
             "idle": "standing idle",
             "move": "walking",
             "talk": "speaking to someone",
+            "shout": "shouting at the crowd",
             "rest": "resting",
             "sleep": "sleeping",
             "work": "working",
@@ -156,12 +157,16 @@ class PerceptionSystem:
             "interact": "busy with something",
             "craft": "crafting",
             "trade": "trading",
+            "give": "giving something away",
             "inspect": "examining something",
             "reflect": "lost in thought",
+            "pray": "praying",
             "goto": "heading somewhere",
             "consume": "eating or drinking",
             "pick_up": "picking something up",
             "drop": "dropping something",
+            "attack": "fighting!",
+            "attacking": "fighting!",
         }
         results: List[str] = []
         for other in agents:
