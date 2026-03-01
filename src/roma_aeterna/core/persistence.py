@@ -442,8 +442,10 @@ def save_game(engine: Any, path: Optional[str] = None) -> str:
         ("economy", json.dumps(engine.economy.serialize())),
     )
 
-    # --- Agents ---
+    # --- Agents (animals are ephemeral — not persisted) ---
     for agent in engine.agents:
+        if getattr(agent, "is_animal", False):
+            continue
         agent_data = _serialize_agent(agent)
         cursor.execute(
             "INSERT INTO agents VALUES (?, ?)",

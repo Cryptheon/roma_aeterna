@@ -133,6 +133,7 @@ class Agent:
             "Priest":           {"threshold": 27.0, "decay": 0.05, "refractory": 4.5},
             "Gladiator":        {"threshold": 12.0, "decay": 0.12, "refractory": 2.0},
             "Guard (Legionary)":{"threshold": 14.0, "decay": 0.10, "refractory": 2.5},
+            "Legionary":        {"threshold": 32.0, "decay": 0.05, "refractory": 5.0},
             "Merchant":         {"threshold": 18.0, "decay": 0.08, "refractory": 3.0},
             "Craftsman":        {"threshold": 20.0, "decay": 0.07, "refractory": 3.5},
             "Plebeian":         {"threshold": 18.0, "decay": 0.09, "refractory": 3.0},

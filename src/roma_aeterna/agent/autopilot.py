@@ -29,7 +29,8 @@ from roma_aeterna.config import (
     CRITICAL_THIRST_THRESHOLD, CRITICAL_HUNGER_THRESHOLD,
     CRITICAL_ENERGY_THRESHOLD, ROUTINE_ENERGY_THRESHOLD,
     ROUTINE_SOCIAL_THRESHOLD, HEALTH_CRITICAL_THRESHOLD,
-    NEARBY_AGENT_RADIUS,
+    NEARBY_AGENT_RADIUS, LEGIONARY_GROUP_RADIUS,
+    ATTACK_PROXIMITY_RADIUS,
 )
 from .pathfinding import Pathfinder
 
@@ -93,7 +94,7 @@ class Autopilot:
             return None  # Let the LLM re-evaluate
 
         # --- Priority 1: SURVIVAL (always handled by autopilot) ---
-        survival = self._check_survival(agent, world)
+        survival = self._check_survival(agent, world, agents)
         if survival:
             return survival
 
@@ -128,8 +129,14 @@ class Autopilot:
     # SURVIVAL — Hardcoded reflexes
     # ================================================================
 
-    def _check_survival(self, agent: Any, world: Any) -> Optional[Dict]:
+    def _check_survival(self, agent: Any, world: Any, agents: List[Any] = None) -> Optional[Dict]:
         """Immediate survival reflexes. Always override everything."""
+
+        # Legionaries engage attacking wolves on sight
+        if "Legionary" in agent.role and agents is not None:
+            attack = self._check_legionary_combat(agent, agents)
+            if attack:
+                return attack
 
         # Flee fire/smoke
         if (agent.status_effects.has_effect("Burned") or
@@ -291,6 +298,12 @@ class Autopilot:
                        world: Any) -> Optional[Dict]:
         """Handle routine, non-urgent behavior."""
 
+        # Legionary formation cohesion — drift toward squad before anything else
+        if "Legionary" in agent.role:
+            form = self._check_legionary_formation(agent, agents, world)
+            if form:
+                return form
+
         # Lonely + someone nearby → but this is nuanced, let LLM handle
         # unless it's a very simple case
         if agent.drives["social"] > ROUTINE_SOCIAL_THRESHOLD:
@@ -323,6 +336,49 @@ class Autopilot:
                 "_autopilot": True,
             }
 
+        return None
+
+    def _check_legionary_combat(self, agent: Any, agents: List[Any]) -> Optional[Dict]:
+        """Attack any wolf that is hunting or attacking within weapon range."""
+        for other in agents:
+            if not getattr(other, "is_animal", False):
+                continue
+            if other.animal_type != "wolf" or not other.is_alive:
+                continue
+            if other.action not in ("HUNTING", "ATTACKING"):
+                continue
+            dist = math.sqrt((other.x - agent.x) ** 2 + (other.y - agent.y) ** 2)
+            if dist <= ATTACK_PROXIMITY_RADIUS:
+                return {
+                    "thought": f"A wolf threatens us! Engage!",
+                    "action": "ATTACK",
+                    "target": other.name,
+                    "_autopilot": True,
+                }
+        return None
+
+    def _check_legionary_formation(self, agent: Any, agents: List[Any],
+                                   world: Any) -> Optional[Dict]:
+        """Move toward the nearest fellow Legionary if the formation is spread out."""
+        soldiers = [
+            a for a in agents
+            if a.uid != agent.uid and a.is_alive
+            and "Legionary" in getattr(a, "role", "")
+            and not getattr(a, "is_animal", False)
+        ]
+        if not soldiers:
+            return None
+        nearest = min(
+            soldiers,
+            key=lambda a: math.sqrt((a.x - agent.x) ** 2 + (a.y - agent.y) ** 2),
+        )
+        d = math.sqrt((nearest.x - agent.x) ** 2 + (nearest.y - agent.y) ** 2)
+        if d > LEGIONARY_GROUP_RADIUS and not self.path:
+            self._set_path_toward(
+                agent, (int(nearest.x), int(nearest.y)), nearest.name, world
+            )
+        if self.path:
+            return self._follow_path(agent, world)
         return None
 
     # ================================================================

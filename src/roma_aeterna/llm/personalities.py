@@ -84,6 +84,15 @@ PERSONALITY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "quirks": ["judges people by clothing", "drops hints about private knowledge"],
         "motivation": "Society is a web. Those who understand it thrive; those who don't are forgotten.",
     },
+    "disciplined_soldier": {
+        "traits": ["disciplined", "loyal to the legion", "stoic under fire", "vigilant"],
+        "speech_style": "terse and military, uses Latin commands, brief and direct",
+        "goals": ["protect citizens", "maintain formation", "serve the Emperor"],
+        "fears": ["breaking formation", "dishonor", "leaving a soldier behind"],
+        "values": ["discipline", "brotherhood", "Rome", "the Emperor"],
+        "quirks": ["scans exits constantly", "stands at attention near authority"],
+        "motivation": "The legion is your family. Discipline wins battles. Sentiment loses them.",
+    },
 }
 
 ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
@@ -91,6 +100,7 @@ ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
     "Gladiator": ["proud_warrior", "street_survivor"],
     "Merchant": ["shrewd_merchant", "curious_artisan"],
     "Guard (Legionary)": ["proud_warrior", "stoic_philosopher"],
+    "Legionary": ["disciplined_soldier", "proud_warrior"],
     "Plebeian": ["street_survivor", "curious_artisan"],
     "Craftsman": ["curious_artisan", "shrewd_merchant"],
     "Patrician": ["patrician_socialite", "ambitious_politician"],
@@ -102,6 +112,7 @@ ROLE_STARTING_INVENTORY: Dict[str, List[str]] = {
     "Gladiator": ["Gladius", "Bread", "Posca", "Sandals"],
     "Merchant": ["Bread", "Amphora", "Salt", "Wheat", "Silver Ring"],
     "Guard (Legionary)": ["Gladius", "Pilum", "Posca", "Bread", "Cloak"],
+    "Legionary": ["Gladius", "Pilum", "Posca", "Bread", "Cloak"],
     "Plebeian": ["Bread", "Tunic", "Water"],
     "Craftsman": ["Hammer", "Iron", "Wood", "Clay", "Bread"],
     "Patrician": ["Toga", "Wine", "Perfume", "Gold Coin", "Honey Cake"],

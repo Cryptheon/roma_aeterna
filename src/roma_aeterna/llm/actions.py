@@ -466,18 +466,19 @@ class ActionExecutor:
             + (" They are dead." if died else ""),
             tick=tick, importance=3.0, tags=["violence"],
         )
-        target_agent.memory.add_event(
-            f"{agent.name} attacked you with {weapon_name}! You lost {damage:.0f} health."
-            + (" You are dying." if target_agent.health < 20 else ""),
-            tick=tick, importance=5.0, tags=["danger", "violence", "negative"],
-        )
+
+        is_animal_target = getattr(target_agent, "is_animal", False)
+        if not is_animal_target:
+            target_agent.memory.add_event(
+                f"{agent.name} attacked you with {weapon_name}! You lost {damage:.0f} health."
+                + (" You are dying." if target_agent.health < 20 else ""),
+                tick=tick, importance=5.0, tags=["danger", "violence", "negative"],
+            )
+            target_agent.memory.update_relationship(agent.name, trust_delta=-20, tick=tick)
+            if not died:
+                target_agent.brain.potential += 5.0
 
         agent.memory.update_relationship(target_agent.name, trust_delta=-10, tick=tick)
-        target_agent.memory.update_relationship(agent.name, trust_delta=-20, tick=tick)
-
-        if not died:
-            target_agent.brain.potential += 5.0
-
         agent.action = "ATTACKING"
 
     def _handle_idle(self, agent: Any, decision: Dict, tick: int) -> None:

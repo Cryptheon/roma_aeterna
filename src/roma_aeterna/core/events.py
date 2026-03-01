@@ -122,6 +122,9 @@ class EventBus:
         for agent in agents:
             if not agent.is_alive:
                 continue
+            # Animals have no memory system — events don't apply
+            if getattr(agent, "is_animal", False):
+                continue
             if agent.uid in event.consumed_by:
                 continue
 

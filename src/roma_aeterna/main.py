@@ -157,6 +157,39 @@ def create_agents(world=None):
     return agents
 
 
+def create_legionaries(world):
+    """Spawn an 8-man contubernium on Via Sacra patrol (~x=95, y=48)."""
+    names = [
+        "Titus Pullo", "Lucius Vorenus", "Gaius Crastinus", "Marcus Petreius",
+        "Quintus Balbus", "Aulus Hirtius", "Sextus Baculus", "Publius Sulla",
+    ]
+    soldiers = []
+    for i, name in enumerate(names):
+        x = 95 + (i % 4) * 2
+        y = 48 + (i // 4) * 2
+        soldiers.append(Agent(name, "Legionary", x, y))
+    return soldiers
+
+
+def create_animals(world):
+    """Spawn wolves, dogs, boars, and ravens across the map."""
+    from roma_aeterna.agent.animal import Animal
+    animals = []
+    # 6 wolves — western edge, drought refugees from the hills
+    for i, (x, y) in enumerate([(8, 60), (9, 63), (7, 67), (10, 70), (8, 74), (11, 77)]):
+        animals.append(Animal("wolf", x, y, f"Wolf {i + 1}"))
+    # 4 stray dogs — scattered through the city
+    for i, (x, y) in enumerate([(55, 55), (75, 80), (120, 60), (90, 100)]):
+        animals.append(Animal("dog", x, y, f"Stray Dog {i + 1}"))
+    # 2 boars — eastern gardens
+    for i, (x, y) in enumerate([(160, 80), (170, 95)]):
+        animals.append(Animal("boar", x, y, f"Wild Boar {i + 1}"))
+    # 3 ravens — high perches, scattered
+    for i, (x, y) in enumerate([(100, 30), (130, 50), (80, 70)]):
+        animals.append(Animal("raven", x, y, f"Raven {i + 1}"))
+    return animals
+
+
 def main():
     print("=" * 50)
     print("  ROME: AETERNA — Forum Romanum District")
@@ -184,12 +217,23 @@ def main():
     print(f"  Landmarks: {list(world.landmarks.keys())}")
 
     agents = create_agents(world)
-    print(f"  Citizens: {len(agents)} ({N_AGENTS} configured)")
+    legionaries = create_legionaries(world)
+    animals = create_animals(world)
+
+    human_agents = agents + legionaries
+    print(f"  Citizens: {len(human_agents)} ({N_AGENTS} configured + {len(legionaries)} legionaries)")
 
     from collections import Counter
-    role_counts = Counter(a.role for a in agents)
+    role_counts = Counter(
+        a.role for a in human_agents
+        if not getattr(a, "is_animal", False)
+    )
     for role, count in sorted(role_counts.items(), key=lambda x: -x[1]):
         print(f"    {role}: {count}")
+    print(f"  Animals: {len(animals)} ({sum(1 for a in animals if a.animal_type == 'wolf')} wolves, "
+          f"{sum(1 for a in animals if a.animal_type == 'dog')} dogs, "
+          f"{sum(1 for a in animals if a.animal_type == 'boar')} boars, "
+          f"{sum(1 for a in animals if a.animal_type == 'raven')} ravens)")
 
     print()
     print("Starting simulation...")
@@ -197,7 +241,7 @@ def main():
     print("Diagnostics: printing to terminal every 10 seconds")
     print()
 
-    engine = SimulationEngine(world, agents)
+    engine = SimulationEngine(world, human_agents + animals)
     renderer = Renderer(engine)
 
     # Background logger — writes ALL LLM I/O and state to disk

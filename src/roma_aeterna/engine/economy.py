@@ -127,6 +127,8 @@ class EconomySystem:
         for agent in agents:
             if not agent.is_alive:
                 continue
+            if getattr(agent, "is_animal", False):
+                continue
 
             wage = ROLE_WAGES.get(agent.role, 2)
             workplaces = ROLE_WORKPLACES.get(agent.role, [])

@@ -59,6 +59,10 @@ class SimulationEngine:
         from roma_aeterna.world.items import ITEM_DB
 
         for agent in self.agents:
+            # Animals are autopilot-only — skip personality/inventory init
+            if getattr(agent, "is_animal", False):
+                continue
+
             if not agent.personality_seed:
                 agent.personality_seed = assign_personality(agent.role, agent.name)
                 agent.personal_goals = agent.personality_seed.get("goals", [])
@@ -121,6 +125,12 @@ class SimulationEngine:
             weather_fx = self.weather.get_effects()
             for agent in self.agents:
                 if not agent.is_alive:
+                    continue
+                if getattr(agent, "is_animal", False):
+                    agent.tick(
+                        self.world, self.agents,
+                        self.tick_count, self.weather.time_of_day.value,
+                    )
                     continue
                 self._update_agent(agent, dt, weather_fx)
 

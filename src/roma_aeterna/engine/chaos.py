@@ -67,6 +67,9 @@ class ChaosEngine:
         for agent in agents:
             if not agent.is_alive:
                 continue
+            # Animals have no drives dict — skip drive-based effects
+            if getattr(agent, "is_animal", False):
+                continue
 
             tile = self.world.get_tile(int(agent.x), int(agent.y))
 

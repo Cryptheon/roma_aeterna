@@ -80,6 +80,20 @@ HEALTH_CRITICAL_THRESHOLD: float = 25.0 # Use medicine from inventory
 PATHFINDING_MAX_STEPS: int = 100         # Greedy path steps — covers ~110 tiles diagonally
 PATHFINDING_ROAD_BIAS: float = 0.2      # Cost multiplier for road tiles (lower = preferred)
 
+# --- Legionary Formation ---
+LEGIONARY_GROUP_RADIUS: float = 14.0   # Move toward unit if farther than this
+LEGIONARY_LONE_THRESHOLD: float = 6.0  # Close enough; no action needed
+
+# --- Animals ---
+WOLF_PACK_RADIUS: float = 18.0
+WOLF_ATTACK_RANGE: float = 1.5
+WOLF_NIGHT_AGGRO_RADIUS: float = 14.0
+WOLF_DAY_AGGRO_RADIUS: float = 3.0
+WOLF_DAMAGE: float = 15.0
+DOG_DAMAGE: float = 8.0
+BOAR_AGGRO_RADIUS: float = 4.0
+BOAR_DAMAGE: float = 20.0
+
 # --- Combat ---
 UNARMED_DAMAGE: float = 5.0             # Base damage when attacking bare-handed
 ATTACK_PROXIMITY_RADIUS: float = 2.0   # Tiles within which ATTACK can reach a target
