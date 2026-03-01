@@ -191,6 +191,12 @@ class AgentDiagnostics:
         for agent in self.engine.agents:
             n_decisions = len(agent.decision_history) if hasattr(agent, 'decision_history') else 0
             status = "DEAD" if not agent.is_alive else ("WAIT" if agent.waiting_for_llm else "OK")
+            if getattr(agent, "is_animal", False):
+                lines.append(
+                    f"  {agent.name:<22} {agent.role:<18} {agent.health:>5.0f} "
+                    f"{'—':>5} {'—':>5} {'—':>7} {n_decisions:>5} {status}[animal]"
+                )
+                continue
             lif_v = f"{agent.brain.potential:.2f}"
             lines.append(
                 f"  {agent.name:<22} {agent.role:<18} {agent.health:>5.0f} "
@@ -255,25 +261,36 @@ class AgentDiagnostics:
             "agents": []
         }
         for agent in self.engine.agents:
-            agent_data = {
-                "name": agent.name,
-                "role": agent.role,
-                "alive": agent.is_alive,
-                "health": agent.health,
-                "position": [agent.x, agent.y],
-                "drives": dict(agent.drives),
-                "lif": {
-                    "potential": agent.brain.potential,
-                    "threshold": agent.brain.params.threshold,
-                    "decay": agent.brain.params.decay_rate,
-                    "refractory": agent.brain.is_refractory,
-                    "urgency": agent._compute_urgency(),
-                },
-                "decisions": agent.decision_history if hasattr(agent, 'decision_history') else [],
-                "prompts_sent": len(agent.prompt_history) if hasattr(agent, 'prompt_history') else 0,
-                "raw_responses": agent.llm_response_log if hasattr(agent, 'llm_response_log') else [],
-                "memory_count": len(agent.memory.short_term) + len(agent.memory.long_term),
-            }
+            if getattr(agent, "is_animal", False):
+                agent_data = {
+                    "name": agent.name,
+                    "role": agent.role,
+                    "is_animal": True,
+                    "alive": agent.is_alive,
+                    "health": agent.health,
+                    "position": [agent.x, agent.y],
+                    "action": agent.action,
+                }
+            else:
+                agent_data = {
+                    "name": agent.name,
+                    "role": agent.role,
+                    "alive": agent.is_alive,
+                    "health": agent.health,
+                    "position": [agent.x, agent.y],
+                    "drives": dict(agent.drives),
+                    "lif": {
+                        "potential": agent.brain.potential,
+                        "threshold": agent.brain.params.threshold,
+                        "decay": agent.brain.params.decay_rate,
+                        "refractory": agent.brain.is_refractory,
+                        "urgency": agent._compute_urgency(),
+                    },
+                    "decisions": agent.decision_history if hasattr(agent, 'decision_history') else [],
+                    "prompts_sent": len(agent.prompt_history) if hasattr(agent, 'prompt_history') else 0,
+                    "raw_responses": agent.llm_response_log if hasattr(agent, 'llm_response_log') else [],
+                    "memory_count": len(agent.memory.short_term) + len(agent.memory.long_term),
+                }
             data["agents"].append(agent_data)
 
         with open(filepath, "w") as f:

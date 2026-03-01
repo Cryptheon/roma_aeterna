@@ -168,16 +168,27 @@ class AgentLogger:
                     "agent": name,
                     "role": agent.role,
                     "health": agent.health,
-                    "drives": dict(agent.drives),
+                    "drives": dict(agent.drives) if agent.drives else {},
                     "position": [agent.x, agent.y],
                     "status_effects": [e.name for e in agent.status_effects.active],
-                    "last_thought": agent.current_thought,
+                    "last_thought": getattr(agent, "current_thought", ""),
                 })
 
     def _log_snapshot(self) -> None:
         """Write a full state snapshot of all agents."""
         agents_data = []
         for agent in self.engine.agents:
+            if getattr(agent, "is_animal", False):
+                agents_data.append({
+                    "name": agent.name,
+                    "role": agent.role,
+                    "is_animal": True,
+                    "alive": agent.is_alive,
+                    "health": round(agent.health, 1),
+                    "position": [round(agent.x, 1), round(agent.y, 1)],
+                    "action": agent.action,
+                })
+                continue
             brain = agent.brain
             agents_data.append({
                 "name": agent.name,

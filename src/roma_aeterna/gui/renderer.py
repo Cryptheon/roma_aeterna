@@ -407,7 +407,23 @@ class Renderer:
         for agent in self.engine.agents:
             sx, sy = self.camera.apply(agent.x, agent.y)
             size = max(4, tile_px)
-            
+
+            if not agent.is_alive:
+                cx = sx + size // 2
+                cy = sy + size // 2
+                corpse_w = max(4, size * 2 // 3)
+                corpse_h = max(2, size // 4)
+                pygame.draw.rect(self.screen, (80, 60, 50),
+                                 (cx - corpse_w // 2, cy - corpse_h // 2, corpse_w, corpse_h))
+                if self.camera.zoom >= 2.0:
+                    label = self.font_label.render(f"{agent.name} (dead)", True, (120, 80, 60))
+                    self.screen.blit(label, (cx - label.get_width() // 2, cy - 12))
+                continue
+
+            if getattr(agent, "is_animal", False):
+                self._render_animal(agent, sx, sy, size)
+                continue
+
             # Shadow
             shadow_surf = pygame.Surface((size, size // 3), pygame.SRCALPHA)
             pygame.draw.ellipse(shadow_surf, (0, 0, 0, 50),
@@ -467,6 +483,88 @@ class Renderer:
             
             if agent.action == "MOVING" and random.random() < 0.1:
                 self.particles.emit_dust(agent.x, agent.y + 0.5)
+
+    # Per-species palette: (body, outline, accent)
+    _ANIMAL_COLORS = {
+        "wolf":  ((35, 190, 175),  (15,  90,  85), (255, 80, 80)),   # teal; red when attacking
+        "dog":   ((215, 185,  45), (100, 80,  10), None),             # golden yellow
+        "boar":  ((220, 110,  25), (110, 50,   5), None),             # bright orange
+        "raven": ((175,  55, 220), ( 80, 20, 110), None),             # violet/magenta
+    }
+
+    def _render_animal(self, agent, sx: int, sy: int, size: int) -> None:
+        """Draw a species-specific sprite for an Animal."""
+        cx = sx + size // 2
+        cy = sy + size // 2
+        atype = agent.animal_type
+
+        body_c, outline_c, attack_c = self._ANIMAL_COLORS.get(
+            atype, ((180, 180, 180), (80, 80, 80), None)
+        )
+
+        if atype == "wolf":
+            body_color = attack_c if agent.action == "ATTACKING" else body_c
+            bw = max(3, size * 3 // 4)
+            bh = max(2, size // 3)
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_color, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
+            # Amber eyes at higher zoom
+            if size >= 6:
+                eye_r = max(1, size // 8)
+                pygame.draw.circle(self.screen, (240, 200, 50),
+                                   (cx - bw // 4, cy - bh // 4), eye_r)
+                pygame.draw.circle(self.screen, (240, 200, 50),
+                                   (cx + bw // 4, cy - bh // 4), eye_r)
+
+        elif atype == "dog":
+            bw = max(2, size * 2 // 3)
+            bh = max(2, size * 3 // 8)
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_c, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
+
+        elif atype == "boar":
+            bw = max(3, size * 4 // 5)
+            bh = max(2, size * 2 // 5)
+            rect = (cx - bw // 2, cy - bh // 2, bw, bh)
+            pygame.draw.rect(self.screen, body_c, rect)
+            pygame.draw.rect(self.screen, outline_c, rect, 1)
+            # Tusk lines at front-right
+            if size >= 6:
+                tx = cx + bw // 2
+                pygame.draw.line(self.screen, (240, 235, 210),
+                                 (tx, cy), (tx + max(1, size // 5), cy - max(1, size // 6)), 1)
+                pygame.draw.line(self.screen, (240, 235, 210),
+                                 (tx, cy + 1), (tx + max(1, size // 5), cy + max(1, size // 5)), 1)
+
+        elif atype == "raven":
+            r = max(2, size // 4)
+            pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
+            pygame.draw.polygon(self.screen, body_c, pts)
+            pygame.draw.polygon(self.screen, outline_c, pts, 1)
+            # Bright beak dot
+            if size >= 5:
+                pygame.draw.circle(self.screen, (240, 220, 60),
+                                   (cx + r, cy), max(1, size // 8))
+
+        # Health bar at zoom >= 2 if damaged
+        if self.camera.zoom >= 2.0 and agent.health < agent.max_health:
+            bar_w = max(4, size * 2 // 3)
+            bar_h = max(1, size // 8)
+            bar_x = cx - bar_w // 2
+            bar_y = cy - size // 2 - bar_h - 1
+            pygame.draw.rect(self.screen, (80, 20, 20),
+                             (bar_x, bar_y, bar_w, bar_h))
+            filled = int(bar_w * agent.health / agent.max_health)
+            if filled > 0:
+                pygame.draw.rect(self.screen, (180, 60, 60),
+                                 (bar_x, bar_y, filled, bar_h))
+
+        # Name label at zoom >= 3
+        if self.camera.zoom >= 3.0:
+            label = self.font_label.render(agent.name, True, (185, 165, 120))
+            self.screen.blit(label, (cx - label.get_width() // 2, cy - size // 2 - 14))
 
     # ================================================================
     # LIGHTING / DAY-NIGHT
@@ -616,7 +714,7 @@ class Renderer:
             True, COLORS["ui_text"])
         bar_surf.blit(weather_text, (200, 7))
         
-        n = len(self.engine.agents)
+        n = sum(1 for a in self.engine.agents if not getattr(a, "is_animal", False))
         count_text = self.font_body.render(f"Citizens: {n}", True,
                                            COLORS["ui_text_dim"])
         bar_surf.blit(count_text, (SCREEN_WIDTH - 150, 7))
@@ -642,21 +740,23 @@ class Renderer:
         pygame.draw.rect(box_surf, (*COLORS["ui_border"], 100),
                          (3, 3, box_w - 6, box_h - 6), 1, border_radius=3)
         
-        if self.engine.agents:
-            hero = self.engine.agents[0]
-            
+        # Pick the first human agent (skip animals which have no drives/thoughts)
+        human_agents = [a for a in self.engine.agents if not getattr(a, "is_animal", False)]
+        if human_agents:
+            hero = human_agents[0]
+
             name_str = f"⟨ {hero.name} — {hero.role} ⟩"
             name_txt = self.font_title.render(name_str, True,
                                               COLORS["ui_text_accent"])
             box_surf.blit(name_txt, (15, 8))
-            
+
             thought = hero.current_thought
             if len(thought) > 90:
                 thought = thought[:90] + "..."
             thought_txt = self.font_body.render(f'"{thought}"', True,
                                                 COLORS["ui_text"])
             box_surf.blit(thought_txt, (15, 35))
-            
+
             y_drives = 58
             drives_info = [
                 ("Hunger", hero.drives["hunger"], COLORS["pompeii_red"]),
@@ -761,18 +861,29 @@ class Renderer:
 
     def _draw_agent_window(self, mx, my):
         """Draws a large scrollable window showing either the LLM prompt or decision history."""
-        if self.agent_window_mode == "prompt":
+        agent = self.selected_agent
+        if getattr(agent, "is_animal", False):
+            display_text = (
+                f"Name: {agent.name}\n"
+                f"Type: {agent.animal_type}\n"
+                f"Health: {agent.health:.1f}/{agent.max_health:.1f}\n"
+                f"Action: {agent.action}\n"
+                f"Position: ({agent.x:.1f}, {agent.y:.1f})\n"
+                f"[Animal — no LLM prompts or decision history]"
+            )
+            title_label = f"Animal: {agent.name}"
+        elif self.agent_window_mode == "prompt":
             from ..llm.prompts import build_prompt
             display_text = build_prompt(
-                self.selected_agent, 
-                self.engine.world, 
-                self.engine.agents, 
+                agent,
+                self.engine.world,
+                self.engine.agents,
                 self.engine.weather
             )
-            title_label = f"Agent Prompt: {self.selected_agent.name}"
+            title_label = f"Agent Prompt: {agent.name}"
         else:
-            display_text = self.selected_agent.get_full_history_text()
-            title_label = f"Decision History: {self.selected_agent.name}"
+            display_text = agent.get_full_history_text()
+            title_label = f"Decision History: {agent.name}"
 
         win_rect = pygame.Rect(100, 50, SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100)
         
@@ -911,6 +1022,8 @@ class Renderer:
     
     def _draw_lif_monitor(self, agent):
         """Draw a live LIF neuron potential graph in the bottom-right corner."""
+        if getattr(agent, "is_animal", False) or agent.brain is None:
+            return
         brain = agent.brain
         history = list(brain.potential_history)
         fire_hist = list(brain.fire_history)

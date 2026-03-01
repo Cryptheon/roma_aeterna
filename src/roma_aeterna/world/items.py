@@ -45,8 +45,18 @@ class ItemDatabase:
         self.recipes: List[Recipe] = self._build_recipes()
 
     def create_item(self, name: str) -> Optional[Item]:
-        """Create a fresh copy of a template item."""
+        """Create a fresh copy of a template item.
+
+        Case-insensitive: 'bread', 'Bread', and 'BREAD' all resolve correctly.
+        """
         template = self.templates.get(name)
+        if not template:
+            # Fallback: case-insensitive search
+            name_lower = name.lower()
+            template = next(
+                (t for k, t in self.templates.items() if k.lower() == name_lower),
+                None,
+            )
         if not template:
             return None
         return Item(
@@ -112,6 +122,8 @@ class ItemDatabase:
              {"preservative": True}, value=10, weight=0.5)
         _add("Herbs", "resource", "Fragrant Mediterranean herbs.",
              {"medicinal": True}, value=3, weight=0.2, spoilable=True)
+        _add("Flour", "food", "Fine wheat flour, ground fresh for baking.",
+             {}, value=2, weight=0.3, spoilable=True)
 
         # --- Food ---
         _add("Bread", "food", "A round loaf of panis, warm from the oven.",

@@ -25,9 +25,10 @@ class StatusEffect:
     duration_ticks: int                 # -1 = permanent until removed
     remaining_ticks: int = -1
     stat_modifiers: Dict[str, float] = field(default_factory=dict)
-    # Keys: "hunger_rate", "energy_rate", "thirst_rate", "speed",
-    #        "social_bonus", "health_regen", "perception_radius",
-    #        "trade_bonus", "comfort_rate"
+    # Multiplier keys (use get_multiplier): hunger_rate, energy_rate, thirst_rate,
+    #   comfort_rate, speed, social_rate
+    # Additive keys  (use get_additive):   health_regen, perception_radius,
+    #   social_bonus, trade_bonus
     tags: List[str] = field(default_factory=list)
     stackable: bool = False
     source: str = "unknown"
@@ -226,20 +227,25 @@ class StatusEffectManager:
             effect.tick()
         self.active = [e for e in self.active if not e.is_expired()]
 
-    def get_modifier(self, stat: str, default: float = 1.0) -> float:
-        """Get the combined modifier for a stat from all active effects.
+    def get_multiplier(self, stat: str) -> float:
+        """Multiplicative modifier for rate stats (hunger_rate, energy_rate, …).
 
-        For rate modifiers, values are multiplied together.
-        For additive bonuses, they're summed.
+        Returns 1.0 when no active effect touches this stat, so multiplying
+        by the result always leaves the base rate unchanged by default.
         """
-        if stat.endswith("_bonus"):
-            return sum(e.stat_modifiers.get(stat, 0.0) for e in self.active)
-        else:
-            result = default
-            for e in self.active:
-                if stat in e.stat_modifiers:
-                    result *= e.stat_modifiers[stat]
-            return result
+        result = 1.0
+        for e in self.active:
+            if stat in e.stat_modifiers:
+                result *= e.stat_modifiers[stat]
+        return result
+
+    def get_additive(self, stat: str) -> float:
+        """Additive modifier for flat stats (health_regen, perception_radius, …).
+
+        Returns 0.0 when no active effect touches this stat, so adding the
+        result to a base value always leaves it unchanged by default.
+        """
+        return sum(e.stat_modifiers.get(stat, 0.0) for e in self.active)
 
     def has_effect(self, name: str) -> bool:
         return any(e.name == name for e in self.active)

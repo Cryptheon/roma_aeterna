@@ -157,6 +157,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=12, height=4))
         obj.add_component(Elevation(height=3.5, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="tabularium", layer=2))
+        obj.add_component(Interactable(interaction_type="read_records", capacity=10))
 
     elif type_name == "Regia":
         obj.obj_type = "monument"
@@ -164,6 +165,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=3, height=3))
         obj.add_component(Elevation(height=1.5, shadow_length=1.0))
         obj.add_component(Decoration(sprite_key="regia", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5))
 
     elif type_name == "ArchOfTitus":
         obj.obj_type = "monument"
@@ -171,6 +173,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=3, height=2))
         obj.add_component(Elevation(height=3.0, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="triumphal_arch", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=10))
 
     elif type_name == "ArchOfSeptimusSeverus":
         obj.obj_type = "monument"
@@ -178,6 +181,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=4, height=2))
         obj.add_component(Elevation(height=3.5, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="arch_large", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=10))
 
     elif type_name == "ArchOfConstantine":
         obj.obj_type = "monument"
@@ -185,6 +189,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=5, height=2))
         obj.add_component(Elevation(height=3.5, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="arch_large", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=10))
 
     elif type_name == "MetaSudans":
         obj.obj_type = "infrastructure"
@@ -201,6 +206,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=12, height=10))
         obj.add_component(Elevation(height=2.5, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="palace", layer=2))
+        obj.add_component(Interactable(interaction_type="audience", capacity=5))
 
     elif type_name == "DomusAugustana":
         obj.obj_type = "building"
@@ -208,6 +214,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=15, height=10))
         obj.add_component(Elevation(height=3.0, shadow_length=2.5))
         obj.add_component(Decoration(sprite_key="domus_augustana", layer=2))
+        obj.add_component(Interactable(interaction_type="audience", capacity=5))
 
     elif type_name == "StadiumOfDomitian":
         obj.obj_type = "monument"
@@ -231,6 +238,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=10, height=12))
         obj.add_component(Elevation(height=2.0, shadow_length=1.5))
         obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+        obj.add_component(Interactable(interaction_type="deliberate", capacity=30))
 
     elif type_name == "MarketsOfTrajan":
         obj.obj_type = "building"
@@ -246,6 +254,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=2, height=2))
         obj.add_component(Elevation(height=4.0, shadow_length=3.0))
         obj.add_component(Decoration(sprite_key="column", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=10))
 
     elif type_name == "ForumAugusti":
         obj.obj_type = "monument"
@@ -253,6 +262,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=8, height=8))
         obj.add_component(Elevation(height=1.5, shadow_length=1.0))
         obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+        obj.add_component(Interactable(interaction_type="deliberate", capacity=20))
 
     elif type_name == "ForumNervae":
         obj.obj_type = "monument"
@@ -260,6 +270,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=4, height=10))
         obj.add_component(Elevation(height=1.5, shadow_length=1.0))
         obj.add_component(Decoration(sprite_key="forum_imperiale", layer=2))
+        obj.add_component(Interactable(interaction_type="deliberate", capacity=15))
 
     # ===== ENTERTAINMENT & TRAINING =====
 
@@ -312,6 +323,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=8, height=2))
         obj.add_component(Elevation(height=1.0, shadow_length=0.5))
         obj.add_component(Decoration(sprite_key="porticus", layer=1))
+        obj.add_component(Interactable(interaction_type="rest_shade", capacity=15))
 
     # ===== RESIDENTIAL =====
     
@@ -364,12 +376,14 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Structural(hp=500, max_hp=500, material="marble"))
         obj.add_component(Elevation(height=2.0))
         obj.add_component(Decoration(sprite_key="column", layer=1))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5))
 
     elif type_name == "Statue":
         obj.obj_type = "decoration"
         obj.add_component(Structural(hp=300, max_hp=300, material="marble"))
         obj.add_component(Elevation(height=1.5))
         obj.add_component(Decoration(sprite_key="statue", layer=1))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5))
 
     elif type_name == "StatueEquestrian":
         obj.obj_type = "decoration"
@@ -377,6 +391,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=2, height=2))
         obj.add_component(Elevation(height=2.5, shadow_length=1.5))
         obj.add_component(Decoration(sprite_key="statue_equestrian", layer=1))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5))
 
     elif type_name == "Obelisk":
         obj.obj_type = "decoration"
@@ -384,6 +399,7 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Footprint(width=1, height=2))
         obj.add_component(Elevation(height=3.0, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="obelisk", layer=2))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5))
 
     elif type_name == "Cloaca":
         obj.obj_type = "infrastructure"
@@ -397,27 +413,32 @@ def create_prefab(type_name, x, y, **kwargs):
         obj.add_component(Flammable(fuel=80, burn_rate=4.0))
         obj.add_component(Elevation(height=2.0, shadow_length=1.5))
         obj.add_component(Decoration(sprite_key="cypress", layer=1))
+        obj.add_component(Interactable(interaction_type="rest_shade", capacity=3, cooldown_max=30.0))
 
     elif type_name == "OliveTree":
         obj.obj_type = "vegetation"
         obj.add_component(Flammable(fuel=60, burn_rate=3.0))
         obj.add_component(Elevation(height=1.5, shadow_length=1.5))
         obj.add_component(Decoration(sprite_key="olive_tree", layer=1))
+        obj.add_component(Interactable(interaction_type="forage", capacity=2, cooldown_max=120.0))
 
     elif type_name == "PineTree":
         obj.obj_type = "vegetation"
         obj.add_component(Flammable(fuel=70, burn_rate=3.5))
         obj.add_component(Elevation(height=2.5, shadow_length=2.0))
         obj.add_component(Decoration(sprite_key="pine_tree", layer=1))
+        obj.add_component(Interactable(interaction_type="rest_shade", capacity=3, cooldown_max=30.0))
 
     elif type_name == "Shrub":
         obj.obj_type = "vegetation"
         obj.add_component(Flammable(fuel=20, burn_rate=8.0))
         obj.add_component(Decoration(sprite_key="shrub", layer=0))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=2, cooldown_max=10.0))
 
     elif type_name == "FlowerBed":
         obj.obj_type = "vegetation"
         obj.add_component(Decoration(sprite_key="flowers", layer=0))
+        obj.add_component(Interactable(interaction_type="inspect", capacity=5, cooldown_max=10.0))
 
     # ===== MISC =====
     

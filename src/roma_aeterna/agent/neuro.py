@@ -12,10 +12,10 @@ from typing import Optional
 @dataclass
 class LIFParameters:
     """Tunable parameters for the LIF decision neuron."""
-    decay_rate: float = 0.1
-    threshold: float = 100.0
+    decay_rate: float = 0.08
+    threshold: float = 18.0    # Calibrated for urgency scale (linear+quadratic drives, baseline=0.3)
     resting_potential: float = 0.0
-    refractory_period: float = 5.0
+    refractory_period: float = 3.0
 
 
 class LeakyIntegrateAndFire:
