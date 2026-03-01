@@ -18,14 +18,18 @@ from .status_effects import StatusEffectManager
 from roma_aeterna.config import (
     WOLF_PACK_RADIUS, WOLF_ATTACK_RANGE, WOLF_NIGHT_AGGRO_RADIUS,
     WOLF_DAMAGE, DOG_DAMAGE, BOAR_AGGRO_RADIUS, BOAR_DAMAGE,
+    MOVEMENT_TICKS_PER_TILE,
 )
 
-
+# speed_interval = ticks between each move step.
+# Scaled relative to MOVEMENT_TICKS_PER_TILE so animal speed is always
+# proportional to human walking speed regardless of TPS tuning.
+_M = MOVEMENT_TICKS_PER_TILE
 ANIMAL_STATS = {
-    "wolf":  {"health": 60.0, "speed_interval": 3},
-    "dog":   {"health": 40.0, "speed_interval": 4},
-    "boar":  {"health": 80.0, "speed_interval": 5},
-    "raven": {"health": 20.0, "speed_interval": 6},
+    "wolf":  {"health": 60.0, "speed_interval": _M},        # same as road pace — fast predator
+    "dog":   {"health": 40.0, "speed_interval": _M + 6},    # slightly slower
+    "boar":  {"health": 80.0, "speed_interval": _M + 10},   # heavy, slow
+    "raven": {"health": 20.0, "speed_interval": _M - 4},    # quick, light
 }
 
 
@@ -169,6 +173,11 @@ class Animal:
         if d <= WOLF_ATTACK_RANGE:
             target.take_damage(WOLF_DAMAGE)
             self.action = "ATTACKING"
+            self._notify_victim(
+                target,
+                f"A wolf lunged at you and bit into you! You took {WOLF_DAMAGE:.0f} damage."
+                + (" You are dying." if target.health < 20 else ""),
+            )
         elif d <= WOLF_NIGHT_AGGRO_RADIUS:
             self._move_toward(target.x, target.y, world)
             self.action = "HUNTING"
@@ -204,6 +213,11 @@ class Animal:
             if d <= 1.2:
                 target.take_damage(BOAR_DAMAGE)
                 self.action = "ATTACKING"
+                self._notify_victim(
+                    target,
+                    f"A wild boar charged and gored you! You took {BOAR_DAMAGE:.0f} damage."
+                    + (" You are dying." if target.health < 20 else ""),
+                )
             else:
                 self._move_toward(target.x, target.y, world)
                 self.action = "CHARGING"
@@ -216,6 +230,29 @@ class Animal:
     def _raven_tick(self, world: Any, agents: List[Any], is_night: bool) -> None:
         self._wander(world)
         self.action = "FLYING"
+
+    # ================================================================
+    # ATTACK HELPERS
+    # ================================================================
+
+    def _notify_victim(self, target: Any, message: str) -> None:
+        """Write an attack event into the victim's memory and spike their LIF.
+
+        Importance 6.0 ensures it rises to long-term memory immediately and
+        dominates the next LLM prompt. The LIF spike forces the brain to fire
+        so the agent reacts this tick rather than waiting for the next cycle.
+        """
+        tick = int(self.current_time)
+        if hasattr(target, "memory"):
+            target.memory.add_event(
+                message,
+                tick=tick,
+                importance=6.0,
+                memory_type="observation",
+                tags=["danger", "violence", "attacked"],
+            )
+        if hasattr(target, "brain") and target.brain is not None:
+            target.brain.potential += 15.0  # guaranteed LIF fire regardless of role threshold
 
     # ================================================================
     # MOVEMENT HELPERS

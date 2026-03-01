@@ -324,18 +324,36 @@ class Memory:
         return "\n".join(lines)
 
     def get_recent_outcomes(self, n: int = 8) -> str:
-        """Return the N most recent non-trivial events as a raw chronological log.
+        """Return the N most recent non-trivial events as a chronological log.
 
-        Unlike get_recent_context() this does NOT deduplicate by text — it preserves
-        the raw timeline so agents can read progression (e.g. "Set off toward X" →
-        several walk steps → "You have arrived near X"). Entries with importance <= 0.5
-        (walk noise) are excluded.
+        Identical texts are collapsed with a (×N) suffix showing the most recent
+        occurrence — prevents restock/routine spam drowning out real events.
+        Entries with importance <= 0.5 (walk noise) are excluded.
         """
         candidates = [m for m in self.short_term if m.importance > 0.5]
-        recent = candidates[-n:]   # oldest-to-newest slice from the tail
-        if not recent:
+        if not candidates:
             return "Nothing notable has happened yet."
-        return "\n".join(f"- [Tick {m.tick}] {m.text}" for m in recent)
+
+        # Group by text: track most-recent tick and total count
+        text_groups: Dict[str, List] = {}  # text -> [max_tick, count]
+        for m in candidates:
+            if m.text in text_groups:
+                entry = text_groups[m.text]
+                if m.tick > entry[0]:
+                    entry[0] = m.tick
+                entry[1] += 1
+            else:
+                text_groups[m.text] = [m.tick, 1]
+
+        # Take the n unique entries with the most-recent occurrences,
+        # then re-sort chronologically for output.
+        top_n = sorted(text_groups.items(), key=lambda x: x[1][0])[-n:]
+
+        lines = []
+        for text, (tick, count) in top_n:
+            suffix = f" (×{count})" if count > 1 else ""
+            lines.append(f"- [Tick {tick}] {text}{suffix}")
+        return "\n".join(lines)
 
     def get_important_memories(self, n: int = 3) -> str:
         """Return the N most important long-term memories."""

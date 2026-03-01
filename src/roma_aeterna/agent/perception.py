@@ -172,6 +172,25 @@ class PerceptionSystem:
                 continue
 
             direction = self._get_direction(other.x, other.y)
+
+            # Animals get a brief threat/atmosphere description instead of the
+            # full social/relationship treatment
+            if getattr(other, "is_animal", False):
+                action_desc = {
+                    "ATTACKING": "attacking!",
+                    "HUNTING":   "hunting nearby",
+                    "CHARGING":  "charging!",
+                    "FLEEING":   "fleeing",
+                    "FLYING":    "circling overhead",
+                    "RESTING":   "resting",
+                    "WANDERING": "wandering",
+                }.get(other.action, other.action.lower())
+                injury = " (wounded)" if other.health < other.max_health * 0.5 else ""
+                results.append(
+                    f"- A {other.animal_type}, {dist:.0f}m to the {direction}, {action_desc}{injury}"
+                )
+                continue
+
             rel = agent.memory.relationships.get(other.name)
 
             # Trust level description
@@ -203,9 +222,9 @@ class PerceptionSystem:
                 distress_parts.append("looks badly injured")
             elif other.status_effects.has_effect("Burned"):
                 distress_parts.append("appears burned")
-            if other.drives["hunger"] > 70:
+            if other.drives.get("hunger", 0) > 70:
                 distress_parts.append("looks hungry")
-            if other.drives["thirst"] > 70:
+            if other.drives.get("thirst", 0) > 70:
                 distress_parts.append("looks parched")
             distress = (", " + ", ".join(distress_parts)) if distress_parts else ""
 

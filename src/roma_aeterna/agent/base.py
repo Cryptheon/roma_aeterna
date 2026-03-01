@@ -30,6 +30,7 @@ from roma_aeterna.config import (
     AMBIENT_TEMP_BASE,
     LIF_BASELINE_URGENCY, LIF_ENV_FIRE_WEIGHT,
     LIF_ENV_NIGHT_URGENCY,
+    MOVEMENT_TICKS_PER_TILE,
 )
 
 
@@ -247,7 +248,7 @@ class Agent:
         if not tile.is_walkable:
             return False, f"The way {direction} is blocked ({tile.terrain_type})."
 
-        base_cost = max(1, int(tile.movement_cost))
+        base_cost = max(1, int(tile.movement_cost * MOVEMENT_TICKS_PER_TILE))
         self.movement_cooldown = base_cost
 
         self.x = float(nx)

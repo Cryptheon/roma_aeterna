@@ -3,7 +3,7 @@ Rome: Aeterna — Global Configuration
 """
 
 # --- Population ---
-N_AGENTS: int = 12                  # Total number of citizens to spawn
+N_AGENTS: int = 20                  # Total number of citizens to spawn
 NAMED_AGENTS_FIRST: bool = True      # Spawn hand-placed agents before random ones
 
 
@@ -29,7 +29,7 @@ DEFAULT_ZOOM: float = 2.0
 
 # --- LLM ---
 VLLM_URL: str = "http://localhost:8000/v1"
-VLLM_MODEL: str = "Qwen/Qwen3-4B-AWQ" #"Qwen/Qwen3-30B-A3B-GPTQ-Int4" #"Qwen/Qwen3-8B-AWQ" 
+VLLM_MODEL: str = "Qwen/Qwen3-14B-AWQ" #"Qwen/Qwen3-30B-A3B-GPTQ-Int4" #"Qwen/Qwen3-8B-AWQ" 
 LLM_TEMPERATURE: float = 1.2
 LLM_MAX_TOKENS: int = 512
 
@@ -41,8 +41,8 @@ MEMORY_SHORT_TERM_CAP: int = 20
 MEMORY_LONG_TERM_CAP: int = 50
 
 # --- Agent Biology ---
-HUNGER_RATE: float = 0.8            # ~10 min to critical from 10
-THIRST_RATE: float = 0.9            # Slightly faster than hunger — thirst is more urgent
+HUNGER_RATE: float = 0.06            # ~10 min to critical from 10
+THIRST_RATE: float = 0.08            # Slightly faster than hunger — thirst is more urgent
 ENERGY_RATE: float = 0.015           # Tired after ~80 min
 SOCIAL_RATE: float = 0.06            # Lonely after ~15 min
 COMFORT_RATE: float = 0.02
@@ -69,6 +69,10 @@ BUILDING_COLLAPSE_RUBBLE_COST: float = 10.0
 FOUNTAIN_HEAL_RATE: float = 0.5
 FOOD_SPOIL_RATE: float = 0.001      # Per tick chance of spoilage
 
+# --- Movement ---
+MOVEMENT_TICKS_PER_TILE: int = 15       # Ticks to cross one tile of cost=1.0 terrain at current TPS
+                                        # road_paved=20t (0.2s), grass=40t (0.4s), hill=60t (0.6s)
+
 # --- Agent Autopilot ---
 MAX_AUTOPILOT_TICKS: int = 300          # Brain fires before forcing an LLM re-evaluation (~3 sec at TPS=100)
 CRITICAL_THIRST_THRESHOLD: float = 70.0 # Trigger emergency drink/navigate
@@ -86,7 +90,7 @@ LEGIONARY_LONE_THRESHOLD: float = 6.0  # Close enough; no action needed
 
 # --- Animals ---
 WOLF_PACK_RADIUS: float = 18.0
-WOLF_ATTACK_RANGE: float = 1.5
+WOLF_ATTACK_RANGE: float = 2
 WOLF_NIGHT_AGGRO_RADIUS: float = 14.0
 WOLF_DAY_AGGRO_RADIUS: float = 3.0
 WOLF_DAMAGE: float = 15.0
@@ -151,6 +155,6 @@ PROMPT_IMPORTANT_MEMORIES_N: int = 16    # Important long-term memories shown
 PROMPT_DECISION_HISTORY_N: int = 16     # Recent actions shown in history
 PROMPT_STATE_TRENDS_N: int = 16          # Drive snapshots shown in trends
 PROMPT_ENV_INTERVAL: int = 3            # Show full verbose environment every N LLM calls
-PROMPT_OUTCOMES_N: int = 8              # Events shown in the chronological outcome log
+PROMPT_OUTCOMES_N: int = 16              # Events shown in the chronological outcome log
 DECISION_THOUGHT_TRUNCATE: int = 512    # Max chars for thought in decision history
 DECISION_SPEECH_TRUNCATE: int = 256     # Max chars for speech in decision history
