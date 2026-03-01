@@ -19,7 +19,6 @@ The autopilot also steps aside when:
   - The agent has been on autopilot too long (novelty-seeking)
 """
 
-import heapq
 import math
 import random
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,9 +29,9 @@ from roma_aeterna.config import (
     CRITICAL_THIRST_THRESHOLD, CRITICAL_HUNGER_THRESHOLD,
     CRITICAL_ENERGY_THRESHOLD, ROUTINE_ENERGY_THRESHOLD,
     ROUTINE_SOCIAL_THRESHOLD, HEALTH_CRITICAL_THRESHOLD,
-    PATHFINDING_MAX_STEPS, PATHFINDING_ROAD_BIAS,
     NEARBY_AGENT_RADIUS,
 )
+from .pathfinding import Pathfinder
 
 
 class AutopilotState(Enum):
@@ -160,38 +159,7 @@ class Autopilot:
 
     def _find_safe_direction(self, agent: Any, world: Any) -> str:
         """Find direction away from danger (fire, smoke)."""
-        from roma_aeterna.agent.base import DIRECTION_DELTAS
-
-        best_dir = "north"
-        best_score = -999.0
-
-        for direction, (dx, dy) in DIRECTION_DELTAS.items():
-            nx, ny = int(agent.x) + dx, int(agent.y) + dy
-            tile = world.get_tile(nx, ny)
-            if not tile or not tile.is_walkable:
-                continue
-
-            score = 0.0
-            # Prefer tiles without smoke
-            if "smoke" not in getattr(tile, "effects", []):
-                score += 5.0
-            # Prefer tiles without fire
-            if not tile.building or not any(
-                getattr(c, "is_burning", False)
-                for c in getattr(tile.building, "components", {}).values()
-            ):
-                score += 10.0
-            # Prefer roads (faster escape)
-            if tile.terrain_type == "road":
-                score += 2.0
-            # Small randomness to prevent oscillation
-            score += random.random()
-
-            if score > best_score:
-                best_score = score
-                best_dir = direction
-
-        return best_dir
+        return Pathfinder.find_safe_direction(agent, world)
 
     # ================================================================
     # NAVIGATION — Multi-step path following
@@ -363,92 +331,10 @@ class Autopilot:
 
     def _set_path_toward(self, agent: Any, target: Tuple[int, int],
                          name: str, world: Any) -> None:
-        """Find an obstacle-avoiding path toward target using A*.
-
-        Uses a closed set to prevent revisiting tiles, so the agent
-        navigates around buildings, trees, and walls rather than
-        oscillating against them. If the destination is beyond
-        PATHFINDING_MAX_STEPS expansions, returns a partial path to
-        the closest explored point — successive GOTO calls will chain
-        these partial paths until the agent arrives.
-        """
-        sx, sy = int(agent.x), int(agent.y)
-        tx, ty = target
-
-        if (sx, sy) == (tx, ty):
-            return
-
-        # open_heap entries: (f_score, tiebreaker, x, y)
-        counter = 0
-        open_heap: List = []
-        heapq.heappush(open_heap, (0.0, counter, sx, sy))
-
-        came_from: Dict[Tuple[int, int], Tuple[int, int]] = {}
-        g_cost: Dict[Tuple[int, int], float] = {(sx, sy): 0.0}
-        closed: set = set()
-
-        best_partial: Tuple[int, int] = (sx, sy)
-        best_dist = math.sqrt((sx - tx) ** 2 + (sy - ty) ** 2)
-        goal_found = False
-
-        while open_heap:
-            _, _, cx, cy = heapq.heappop(open_heap)
-
-            if (cx, cy) in closed:
-                continue
-            closed.add((cx, cy))
-
-            # Track the closest explored point for partial-path fallback
-            d = math.sqrt((cx - tx) ** 2 + (cy - ty) ** 2)
-            if d < best_dist:
-                best_dist = d
-                best_partial = (cx, cy)
-
-            if (cx, cy) == (tx, ty):
-                goal_found = True
-                break
-
-            # Expansion limit — return partial path to closest point found
-            if len(closed) >= PATHFINDING_MAX_STEPS:
-                break
-
-            current_g = g_cost.get((cx, cy), 0.0)
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
-                    if dx == 0 and dy == 0:
-                        continue
-                    nx, ny = cx + dx, cy + dy
-                    if (nx, ny) in closed:
-                        continue
-                    tile = world.get_tile(nx, ny)
-                    if not tile or not tile.is_walkable:
-                        continue
-
-                    # Diagonal moves cost √2, cardinal moves cost 1
-                    move_cost = 1.414 if (dx != 0 and dy != 0) else 1.0
-                    if tile.terrain_type == "road":
-                        move_cost *= PATHFINDING_ROAD_BIAS
-
-                    ng = current_g + move_cost
-                    if (nx, ny) not in g_cost or ng < g_cost[(nx, ny)]:
-                        g_cost[(nx, ny)] = ng
-                        h = math.sqrt((nx - tx) ** 2 + (ny - ty) ** 2)
-                        counter += 1
-                        heapq.heappush(open_heap, (ng + h, counter, nx, ny))
-                        came_from[(nx, ny)] = (cx, cy)
-
-        end = (tx, ty) if goal_found else best_partial
-        if end == (sx, sy):
-            return  # No progress possible (agent is surrounded)
-
-        # Reconstruct path by tracing came_from back to start
-        path: List[Tuple[int, int]] = []
-        node = end
-        while node in came_from:
-            path.append(node)
-            node = came_from[node]
-        path.reverse()
-
+        """Find an obstacle-avoiding path toward target using A*."""
+        path = Pathfinder.find_path(
+            (int(agent.x), int(agent.y)), target, world
+        )
         if path:
             self.set_path(path, name)
 
@@ -469,16 +355,7 @@ class Autopilot:
     @staticmethod
     def _direction_to(ax: float, ay: float, tx: int, ty: int) -> str:
         """Compute direction from (ax,ay) to (tx,ty)."""
-        dx, dy = tx - ax, ty - ay
-        if dx == 0 and dy == 0:
-            return "north"
-        angle = math.degrees(math.atan2(dy, dx))
-        if angle < 0:
-            angle += 360
-        dirs = ["east", "southeast", "south", "southwest",
-                "west", "northwest", "north", "northeast"]
-        idx = int((angle + 22.5) // 45) % 8
-        return dirs[idx]
+        return Pathfinder.direction_to(ax, ay, tx, ty)
 
     # ================================================================
     # SERIALIZATION (for persistence)

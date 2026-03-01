@@ -19,6 +19,9 @@ from .memory import Memory
 from .neuro import LeakyIntegrateAndFire, LIFParameters
 from .autopilot import Autopilot
 from .status_effects import StatusEffectManager, create_effect
+from .constants import VALID_ACTIONS, DIRECTION_DELTAS
+from .perception import PerceptionSystem
+from .recording import DecisionRecorder
 from roma_aeterna.config import (
     PERCEPTION_RADIUS, INTERACTION_RADIUS, MAX_INVENTORY_SIZE,
     HUNGER_RATE, ENERGY_RATE, SOCIAL_RATE, THIRST_RATE, COMFORT_RATE,
@@ -28,27 +31,6 @@ from roma_aeterna.config import (
     LIF_BASELINE_URGENCY, LIF_ENV_FIRE_WEIGHT,
     LIF_ENV_NIGHT_URGENCY,
 )
-
-
-VALID_ACTIONS = {
-    "MOVE", "TALK", "INTERACT", "PICK_UP", "DROP", "CONSUME",
-    "CRAFT", "TRADE", "REST", "SLEEP", "INSPECT", "IDLE",
-    "GOTO",     # Multi-step navigation to a named location
-    "BUY",      # Purchase from a market
-    "WORK",     # Perform role duties at a building
-    "REFLECT",  # Write a personal note to long-term memory
-}
-
-DIRECTION_DELTAS: Dict[str, Tuple[int, int]] = {
-    "north":      (0, -1),
-    "south":      (0, 1),
-    "east":       (1, 0),
-    "west":       (-1, 0),
-    "northeast":  (1, -1),
-    "northwest":  (-1, -1),
-    "southeast":  (1, 1),
-    "southwest":  (-1, 1),
-}
 
 
 class Agent:
@@ -89,6 +71,7 @@ class Agent:
             self._make_lif_params()
         )
         self.autopilot = Autopilot()
+        self._perception = PerceptionSystem(self)
         self.current_time: float = 0.0
 
         # --- State ---
@@ -111,10 +94,7 @@ class Agent:
         self.status_effects = StatusEffectManager()
 
         # --- Decision History (for LLM context + inspection) ---
-        self.decision_history: List[Dict[str, Any]] = []
-        self.prompt_history: List[str] = []
-        self.llm_response_log: List[Dict[str, Any]] = []
-        self._max_decision_history: int = 20
+        self._recorder = DecisionRecorder(self)
 
         # --- Drive History (for past state awareness) ---
         self.drive_snapshots: List[Dict[str, Any]] = []
@@ -224,259 +204,11 @@ class Agent:
                  radius: Optional[int] = None,
                  include_environment: bool = True) -> str:
         """Build a natural-language description of what the agent sees."""
-        radius = radius or PERCEPTION_RADIUS
-        radius_mod = int(self.status_effects.get_additive("perception_radius"))
-        effective_radius = max(2, radius + radius_mod)
-
-        sections: List[str] = []
-
-        tile_desc = self._describe_current_tile(world)
-        if tile_desc:
-            sections.append(f"YOU ARE STANDING ON: {tile_desc}")
-
-        buildings = self._scan_buildings(world, effective_radius)
-        if buildings:
-            sections.append("STRUCTURES NEARBY:\n" + "\n".join(buildings))
-
-        ground_items = self._scan_ground_items(world, effective_radius)
-        if ground_items:
-            sections.append("ITEMS ON THE GROUND:\n" + "\n".join(ground_items))
-
-        nearby_agents = self._scan_agents(agents, effective_radius)
-        if nearby_agents:
-            sections.append("PEOPLE NEARBY:\n" + "\n".join(nearby_agents))
-
-        # Full environment prose is throttled; anomalies (smoke/rubble) always shown
-        if include_environment:
-            env_full = self._describe_environment_full(world)
-            env_anomalies = self._describe_environment_anomalies(world)
-            env_combined = " ".join(filter(None, [env_full, env_anomalies]))
-        else:
-            env_combined = self._describe_environment_anomalies(world)
-        if env_combined:
-            sections.append("ENVIRONMENT:\n" + env_combined)
-
-        directions = self._scan_directions(world)
-        if directions:
-            sections.append("PASSABLE DIRECTIONS: " + ", ".join(directions))
-
-        if not sections:
-            return "You see nothing remarkable around you. The area is quiet."
-
-        return "\n\n".join(sections)
-
-    def _scan_buildings(self, world: Any, radius: int) -> List[str]:
-        results: List[str] = []
-        seen_names: set = set()
-
-        min_x = max(0, int(self.x) - radius)
-        max_x = min(world.width, int(self.x) + radius)
-        min_y = max(0, int(self.y) - radius)
-        max_y = min(world.height, int(self.y) + radius)
-
-        for ty in range(min_y, max_y):
-            for tx in range(min_x, max_x):
-                tile = world.get_tile(tx, ty)
-                if not tile or not tile.building:
-                    continue
-
-                bld = tile.building
-                if bld.name in seen_names:
-                    continue
-                seen_names.add(bld.name)
-
-                dist = math.sqrt((tx - self.x) ** 2 + (ty - self.y) ** 2)
-                direction = self._get_direction(tx, ty)
-
-                modifiers: List[str] = []
-                for comp in bld.components.values():
-                    if getattr(comp, "is_burning", False):
-                        intensity = getattr(comp, "fire_intensity", 0)
-                        if intensity > 10:
-                            modifiers.append("ENGULFED IN FLAMES!")
-                        else:
-                            modifiers.append("ON FIRE!")
-
-                from roma_aeterna.world.components import Structural, Interactable
-                struct = bld.get_component(Structural)
-                if struct and struct.hp < struct.max_hp * 0.3:
-                    modifiers.append("badly damaged, looks about to collapse")
-                elif struct and struct.hp < struct.max_hp * 0.5:
-                    modifiers.append("damaged")
-
-                interact = bld.get_component(Interactable)
-                if interact:
-                    modifiers.append(f"[{interact.interaction_type}]")
-
-                mod_str = f" ({', '.join(modifiers)})" if modifiers else ""
-                results.append(
-                    f"- {bld.name}{mod_str}: {dist:.0f}m to the {direction}"
-                )
-                self.memory.learn_location(bld.name, (tx, ty))
-
-        return results
-
-    def _scan_ground_items(self, world: Any, radius: int) -> List[str]:
-        results: List[str] = []
-        min_x = max(0, int(self.x) - radius)
-        max_x = min(world.width, int(self.x) + radius)
-        min_y = max(0, int(self.y) - radius)
-        max_y = min(world.height, int(self.y) + radius)
-
-        for ty in range(min_y, max_y):
-            for tx in range(min_x, max_x):
-                tile = world.get_tile(tx, ty)
-                if not tile:
-                    continue
-                for item in getattr(tile, "ground_items", []):
-                    dist = math.sqrt((tx - self.x) ** 2 + (ty - self.y) ** 2)
-                    direction = self._get_direction(tx, ty)
-                    results.append(f"- {item.name}: {dist:.0f}m to the {direction}")
-        return results
-
-    def _scan_agents(self, agents: List["Agent"], radius: int) -> List[str]:
-        _ACTIVITY_LABELS = {
-            "idle": "standing idle",
-            "move": "walking",
-            "talk": "speaking to someone",
-            "rest": "resting",
-            "sleep": "sleeping",
-            "work": "working",
-            "buy": "buying something",
-            "interact": "busy with something",
-            "craft": "crafting",
-            "trade": "trading",
-            "inspect": "examining something",
-            "reflect": "lost in thought",
-            "goto": "heading somewhere",
-            "consume": "eating or drinking",
-            "pick_up": "picking something up",
-            "drop": "dropping something",
-        }
-        results: List[str] = []
-        for other in agents:
-            if other.uid == self.uid or not other.is_alive:
-                continue
-            dist = math.sqrt((other.x - self.x) ** 2 + (other.y - self.y) ** 2)
-            if dist > radius:
-                continue
-
-            direction = self._get_direction(other.x, other.y)
-            rel = self.memory.relationships.get(other.name)
-
-            # Trust level description
-            if rel and rel.familiarity > 10:
-                if rel.trust > 50:
-                    known = " (trusted ally)"
-                elif rel.trust > 20:
-                    known = " (friendly)"
-                elif rel.trust < -50:
-                    known = " (hostile)"
-                elif rel.trust < -20:
-                    known = " (distrusted)"
-                else:
-                    known = " (acquaintance)"
-            else:
-                known = ""
-
-            # Human-readable activity
-            activity = _ACTIVITY_LABELS.get(other.action.lower(), other.action.lower())
-
-            # Speech — always shown if within earshot
-            speech = ""
-            if other.last_speech and dist < INTERACTION_RADIUS * 2:
-                speech = f', saying: "{other.last_speech}"'
-
-            # Visible distress
-            distress_parts = []
-            if other.health < 30:
-                distress_parts.append("looks badly injured")
-            elif other.status_effects.has_effect("Burned"):
-                distress_parts.append("appears burned")
-            if other.drives["hunger"] > 70:
-                distress_parts.append("looks hungry")
-            if other.drives["thirst"] > 70:
-                distress_parts.append("looks parched")
-            distress = (", " + ", ".join(distress_parts)) if distress_parts else ""
-
-            results.append(
-                f"- {other.name}, a {other.role}, {dist:.0f}m to the {direction}, "
-                f"{activity}{distress}{known}{speech}"
-            )
-        return results
-
-    def _describe_environment_full(self, world: Any) -> str:
-        """Return weather and time-of-day prose (throttled by build_prompt)."""
-        parts: List[str] = []
-        weather = getattr(world, "_current_weather_desc", None)
-        if weather:
-            parts.append(weather)
-        time_of_day = getattr(world, "_current_time_desc", None)
-        if time_of_day:
-            parts.append(time_of_day)
-        return " ".join(parts) if parts else ""
-
-    def _describe_environment_anomalies(self, world: Any) -> str:
-        """Return hazard anomalies (smoke, rubble) — always shown regardless of throttle."""
-        parts: List[str] = []
-        tile = world.get_tile(int(self.x), int(self.y))
-        if tile:
-            effects = getattr(tile, "effects", [])
-            if "smoke" in effects:
-                parts.append("⚠ Thick smoke fills the air here, stinging your eyes.")
-            if "rubble" in effects:
-                parts.append("⚠ The ground is covered in rubble from a collapsed building.")
-        return " ".join(parts) if parts else ""
-
-    def _describe_environment(self, world: Any) -> str:
-        """Combined full + anomalies (kept for any direct callers outside build_prompt)."""
-        parts = [
-            self._describe_environment_full(world),
-            self._describe_environment_anomalies(world),
-        ]
-        return " ".join(p for p in parts if p)
-
-    def _describe_current_tile(self, world: Any) -> str:
-        tile = world.get_tile(int(self.x), int(self.y))
-        if not tile:
-            return "unknown terrain"
-
-        terrain_names = {
-            "road": "a paved Roman road",
-            "grass": "a grassy patch",
-            "dirt": "bare earth",
-            "sand": "sandy ground",
-            "water": "shallow water",
-            "marble_floor": "polished marble flooring",
-            "plaza": "an open plaza",
-            "forest": "dense woodland",
-            "mountain": "rocky rubble",
-        }
-        desc = terrain_names.get(tile.terrain_type, tile.terrain_type)
-        if tile.building:
-            desc += f" (inside/near {tile.building.name})"
-        return desc
+        return self._perception.perceive(world, agents, radius, include_environment)
 
     def _scan_directions(self, world: Any) -> List[str]:
-        passable: List[str] = []
-        for direction, (dx, dy) in DIRECTION_DELTAS.items():
-            nx, ny = int(self.x) + dx, int(self.y) + dy
-            tile = world.get_tile(nx, ny)
-            if tile and tile.is_walkable:
-                passable.append(direction)
-        return passable
-
-    def _get_direction(self, tx: float, ty: float) -> str:
-        dx, dy = tx - self.x, ty - self.y
-        if dx == 0 and dy == 0:
-            return "here"
-        angle = math.degrees(math.atan2(dy, dx))
-        if angle < 0:
-            angle += 360
-        dirs = ["east", "southeast", "south", "southwest",
-                "west", "northwest", "north", "northeast"]
-        idx = int((angle + 22.5) // 45) % 8
-        return dirs[idx]
+        """Kept as a delegate — autopilot and mock decision both call this."""
+        return self._perception._scan_directions(world)
 
     # ================================================================
     # MOVEMENT
@@ -565,145 +297,8 @@ class Agent:
         return True, result
 
     def _execute_interaction(self, target: Any, interact: Any) -> str:
-        itype = interact.interaction_type
-        name = target.name
-
-        if itype == "pray":
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 15)
-            self.drives["social"] = max(0, self.drives["social"] - 5)
-            effect = create_effect("blessed")
-            if effect:
-                self.status_effects.add(effect)
-            return f"You pray at {name}. A sense of peace washes over you."
-
-        elif itype == "drink":
-            from roma_aeterna.world.components import Liquid, WaterFeature
-            water_feature = target.get_component(WaterFeature)
-            if water_feature and water_feature.is_active:
-                self.drives["thirst"] = max(0, self.drives["thirst"] - 40)
-                effect = create_effect("refreshed")
-                if effect:
-                    self.status_effects.add(effect)
-                return f"You drink fresh water from {name}. Refreshing!"
-            liquid = target.get_component(Liquid)
-            if liquid and liquid.amount > 0:
-                self.drives["thirst"] = max(0, self.drives["thirst"] - 40)
-                liquid.amount -= 5
-                effect = create_effect("refreshed")
-                if effect:
-                    self.status_effects.add(effect)
-                return f"You drink from {name}. Refreshing!"
-            return f"{name} is dry."
-
-        elif itype == "rest":
-            from roma_aeterna.world.components import WaterFeature
-            water = target.get_component(WaterFeature)
-            if water and water.is_active:
-                # Bathhouse — full bathing experience
-                self.drives["energy"] = max(0, self.drives["energy"] - 30)
-                self.drives["comfort"] = max(0, self.drives["comfort"] - 20)
-                self.drives["thirst"] = max(0, self.drives["thirst"] - 10)
-                effect = create_effect("refreshed")
-                if effect:
-                    self.status_effects.add(effect)
-                return (f"You bathe at {name}. The warm waters soothe your tired muscles "
-                        f"and the steam clears your mind.")
-            self.drives["energy"] = max(0, self.drives["energy"] - 20)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 10)
-            return f"You rest at {name}. Your body relaxes."
-
-        elif itype == "rest_shade":
-            self.drives["energy"] = max(0, self.drives["energy"] - 15)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 8)
-            name_lower = name.lower()
-            if "cypress" in name_lower or "pine" in name_lower:
-                return (f"You sit in the shade of {name}. The cool shadow offers "
-                        f"relief from the midday heat.")
-            elif "porticus" in name_lower or "portico" in name_lower:
-                return (f"You rest beneath the colonnade of {name}. Merchants and "
-                        f"citizens stroll past in the shade.")
-            return f"You rest in the shade of {name}. The cool shadow relieves the heat."
-
-        elif itype == "forage":
-            import random
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
-            if random.random() < 0.40:
-                self.drives["hunger"] = max(0, self.drives["hunger"] - 15)
-                return (f"You gather olives from {name}. A handful of ripe fruit "
-                        f"fills your palm — bitter but nourishing.")
-            return (f"You search {name} but the branches are picked clean. "
-                    f"You find little worth taking today.")
-
-        elif itype == "read_records":
-            self.drives["social"] = max(0, self.drives["social"] - 5)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
-            return (f"You study the public records at {name}. Rows of tablets "
-                    f"record Rome's laws, census rolls, and the names of the dead. "
-                    f"History presses against your fingertips.")
-
-        elif itype == "trade":
-            return f"You browse the wares at {name}."
-
-        elif itype == "spectate":
-            self.drives["social"] = max(0, self.drives["social"] - 15)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
-            return f"You watch the spectacle at {name}. The crowd roars!"
-
-        elif itype == "train":
-            self.drives["energy"] += 15
-            effect = create_effect("exercised")
-            if effect:
-                self.status_effects.add(effect)
-            return f"You train at {name}. Your muscles burn but you feel stronger."
-
-        elif itype == "speak":
-            self.drives["social"] = max(0, self.drives["social"] - 20)
-            return f"You address the crowd from {name}. Your voice carries across the Forum."
-
-        elif itype == "deliberate":
-            self.drives["social"] = max(0, self.drives["social"] - 15)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
-            return (f"You join the public deliberations at {name}. "
-                    f"Citizens argue, senators posture, and voices echo off the marble.")
-
-        elif itype == "audience":
-            self.drives["social"] = max(0, self.drives["social"] - 8)
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 5)
-            return (f"You wait at {name}, hoping for an audience. "
-                    f"The halls are filled with petitioners clutching their tablets.")
-
-        elif itype == "inspect":
-            self.drives["comfort"] = max(0, self.drives["comfort"] - 3)
-            name_lower = name.lower()
-            if "statue" in name_lower and "equestrian" in name_lower:
-                return (f"You study the equestrian statue of {name}. The bronze rider "
-                        f"commands the square, frozen mid-triumph.")
-            elif "statue" in name_lower:
-                return (f"You stand before {name}. The sculptor's chisel has captured "
-                        f"godlike calm in cold marble.")
-            elif "column of trajan" in name_lower:
-                return (f"You crane your neck to read {name}'s spiral reliefs. "
-                        f"Thousands of soldiers — Dacian wars in stone — wind endlessly upward.")
-            elif "column" in name_lower:
-                return f"You trace the fluting of {name}. Fine marble, quarried from distant hills."
-            elif "obelisk" in name_lower:
-                return (f"You read the hieroglyphs on {name}. Egyptian writing — older than Rome "
-                        f"itself — speaks of distant pharaohs.")
-            elif "arch" in name_lower:
-                return (f"You walk beneath {name} and read the dedication carved in the frieze. "
-                        f"Triumph and glory, written in stone for all to see.")
-            elif "regia" in name_lower:
-                return (f"You examine {name} — the ancient seat of the Pontifex Maximus. "
-                        f"Its stones remember kings. Rome barely does.")
-            elif "shrub" in name_lower:
-                return (f"You crouch beside {name}. A lizard flickers between the stems "
-                        f"and vanishes into the shade.")
-            elif "flower" in name_lower:
-                return (f"You lean close to {name}. The blooms smell faintly sweet "
-                        f"and a bee drifts past, indifferent to Rome's troubles.")
-            return f"You carefully inspect {name}."
-
-        return f"You interact with {name}."
+        from .interactions import execute_interaction
+        return execute_interaction(self, target, interact)
 
     def talk_to(self, target_name: str, message: str, agents: List["Agent"],
                 tick: int) -> Tuple[bool, str]:
@@ -1030,94 +625,41 @@ class Agent:
             lines.append(f"Path: {self.autopilot.destination_name} ({len(self.autopilot.path)} steps)")
         return lines
 
+    # ================================================================
+    # RECORDING — delegate to DecisionRecorder
+    # ================================================================
+
+    @property
+    def decision_history(self) -> List[Dict[str, Any]]:
+        return self._recorder.decision_history
+
+    @decision_history.setter
+    def decision_history(self, val: List[Dict[str, Any]]) -> None:
+        self._recorder.decision_history = val
+
+    @property
+    def prompt_history(self) -> List[str]:
+        return self._recorder.prompt_history
+
+    @property
+    def llm_response_log(self) -> List[Dict[str, Any]]:
+        return self._recorder.llm_response_log
+
     def record_decision(self, decision: Dict[str, Any], source: str = "llm") -> None:
-        """Record a decision for history tracking.
-        
-        Args:
-            decision: The decision dict (thought, action, target, etc.)
-            source: 'llm' or 'autopilot'
-        """
-        entry = {
-            "tick": int(self.current_time),
-            "source": source,
-            "thought": decision.get("thought", "..."),
-            "action": decision.get("action", "IDLE"),
-            "target": decision.get("target", ""),
-            "speech": decision.get("speech", ""),
-        }
-        self.decision_history.append(entry)
-        if len(self.decision_history) > self._max_decision_history:
-            self.decision_history.pop(0)
+        return self._recorder.record_decision(decision, source)
 
     def record_prompt(self, prompt: str) -> None:
-        """Store the last prompt sent to the LLM for inspection."""
-        self.prompt_history.append(prompt)
-        if len(self.prompt_history) > 5:
-            self.prompt_history.pop(0)
+        return self._recorder.record_prompt(prompt)
 
-    def record_llm_response(self, raw_text: str, parsed: Any = None, error: str = "") -> None:
-        """Store the raw LLM response for debugging."""
-        entry = {
-            "tick": int(self.current_time),
-            "raw": raw_text[:500],  # Truncate to avoid memory bloat
-            "parsed": str(parsed)[:200] if parsed else None,
-            "error": error,
-        }
-        self.llm_response_log.append(entry)
-        if len(self.llm_response_log) > 10:
-            self.llm_response_log.pop(0)
+    def record_llm_response(self, raw_text: str, parsed: Any = None,
+                            error: str = "") -> None:
+        return self._recorder.record_llm_response(raw_text, parsed, error)
 
     def get_decision_history_summary(self, n: int = 10) -> str:
-        """Return last N decisions, newest first.
-
-        Consecutive entries with the same action + target + source are collapsed
-        into a single line with a (×N) count — this prevents autopilot MOVE
-        runs from consuming every slot in the history view.
-        """
-        if not self.decision_history:
-            return "You have not taken any actions yet."
-        recent = self.decision_history[-n:]
-
-        # Collapse consecutive identical (action, target, source) runs
-        groups: List[Dict[str, Any]] = []
-        for d in recent:
-            key = (d["action"], d.get("target", ""), d["source"])
-            if groups and groups[-1]["key"] == key:
-                groups[-1]["entries"].append(d)
-            else:
-                groups.append({"key": key, "entries": [d]})
-
-        lines = []
-        for g in reversed(groups):  # newest first
-            d = g["entries"][-1]    # most recent entry in this run
-            src = "[auto]" if d["source"] == "autopilot" else "[think]"
-            action_desc = d["action"]
-            if d.get("target"):
-                action_desc += f" → {d['target']}"
-            if d.get("speech"):
-                action_desc += f' (said: "{d["speech"][:60]}")'
-            count = len(g["entries"])
-            count_suffix = f" (×{count})" if count > 1 else ""
-            lines.append(
-                f"  [Tick {d['tick']}] {src} {action_desc}{count_suffix}: {d['thought'][:100]}"
-            )
-        return "\n".join(lines)
+        return self._recorder.get_decision_history_summary(n)
 
     def get_full_history_text(self) -> str:
-        """Return full decision history for the inspection window."""
-        if not self.decision_history:
-            return "No decisions recorded yet."
-        lines = []
-        for i, d in enumerate(self.decision_history):
-            src = "AUTOPILOT" if d["source"] == "autopilot" else "LLM"
-            lines.append(f"[Tick {d['tick']}] ({src}) Action: {d['action']}")
-            lines.append(f"  Thought: {d['thought']}")
-            if d.get("target"):
-                lines.append(f"  Target: {d['target']}")
-            if d.get("speech"):
-                lines.append(f"  Speech: \"{d['speech']}\"")
-            lines.append("")
-        return "\n".join(lines)
+        return self._recorder.get_full_history_text()
 
     def get_inventory_summary(self) -> str:
         if not self.inventory:
@@ -1157,18 +699,4 @@ class Agent:
         return "\n".join(parts)
 
     def get_past_states_summary(self, n: int = 6) -> str:
-        """Return recent drive snapshots as text for LLM context."""
-        if len(self.drive_snapshots) < 2:
-            return "No prior state data yet."
-
-        recent = self.drive_snapshots[-n:]
-        lines = []
-        for snap in recent:
-            d = snap["drives"]
-            lines.append(
-                f"  Tick {snap['tick']}: HP={snap['health']}, "
-                f"Hunger={d['hunger']:.0f}%, Thirst={d['thirst']:.0f}%, "
-                f"Energy={d['energy']:.0f}%, Social={d['social']:.0f}%, "
-                f"Comfort={d.get('comfort', 0):.0f}%"
-            )
-        return "\n".join(lines)
+        return self._recorder.get_past_states_summary(n)

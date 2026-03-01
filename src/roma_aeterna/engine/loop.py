@@ -55,7 +55,7 @@ class SimulationEngine:
 
     def _initialize_agents(self) -> None:
         """Give agents personalities and starting items."""
-        from roma_aeterna.llm.prompts import assign_personality, ROLE_STARTING_INVENTORY
+        from roma_aeterna.llm.personalities import assign_personality, ROLE_STARTING_INVENTORY
         from roma_aeterna.world.items import ITEM_DB
 
         for agent in self.agents:
