@@ -4,8 +4,13 @@ Rome: Aeterna — Global Configuration
 
 import os
 
+# --- Scenario ---
+# Which simulation environment to load.
+# Available: "rome" | "gladiator_arena"
+SCENARIO: str = "gladiator_arena"
+
 # --- Population ---
-N_AGENTS: int = 2                  # Total number of citizens to spawn
+N_AGENTS: int = 1                  # Total number of citizens to spawn
 NAMED_AGENTS_FIRST: bool = True      # Spawn hand-placed agents before random ones
 
 
@@ -114,15 +119,15 @@ WOLF_PACK_RADIUS: float = 18.0
 WOLF_ATTACK_RANGE: float = 2
 WOLF_NIGHT_AGGRO_RADIUS: float = 14.0
 WOLF_DAY_AGGRO_RADIUS: float = 3.0
-WOLF_DAMAGE: float = 15.0
-DOG_DAMAGE: float = 8.0
-BOAR_AGGRO_RADIUS: float = 4.0
-BOAR_DAMAGE: float = 20.0
+WOLF_DAMAGE: float = 5.0
+DOG_DAMAGE: float = 3.0
+BOAR_AGGRO_RADIUS: float = 3.0
+BOAR_DAMAGE: float = 4.0
 
 # --- Combat ---
-UNARMED_DAMAGE: float = 5.0             # Base damage when attacking bare-handed
+UNARMED_DAMAGE: float = 15.0             # Base damage when attacking bare-handed
 ATTACK_PROXIMITY_RADIUS: float = 2.0   # Tiles within which ATTACK can reach a target
-DEAD_REMOVAL_DELAY: int = 900          # Ticks before corpse is purged (~30s at TPS=30)
+DEAD_REMOVAL_DELAY: int = 1800          # Ticks before corpse is purged (~30s at TPS=30)
 
 # --- Proximity / Interaction Ranges ---
 NEARBY_AGENT_RADIUS: float = 5.0        # TRADE, BUY proximity, social checks

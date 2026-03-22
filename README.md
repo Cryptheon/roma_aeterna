@@ -1,211 +1,312 @@
-# 🏛️ Rome: Aeterna — Agent-Based Ancient World Simulator
+# Rome: Aeterna — Agent-Based Ancient World Simulator
 
 ![Rome: Aeterna Simulation Interface](assets/screenshots/interface.png)
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active-orange)
-![Engine](https://img.shields.io/badge/engine-PyGame%20%2B%20vLLM-purple)
+![Engine](https://img.shields.io/badge/engine-PyGame%20%2B%20Gemini%20%2F%20vLLM-purple)
 
-**Rome: Aeterna** is a high-fidelity, 2D top-down simulation of Ancient Rome (c. 161 AD), populated by autonomous AI agents. Unlike traditional game loops, this engine decouples simulation logic from rendering, allowing for complex biological, environmental, and cognitive processes to run asynchronously.
+**Rome: Aeterna** is a high-fidelity, 2D top-down simulation of the ancient world populated by autonomous AI agents. Unlike traditional game loops, this engine decouples simulation logic from rendering, allowing complex biological, environmental, and cognitive processes to run asynchronously.
 
-The simulation features a **living ecosystem** where agents possess a Dual-Brain architecture (fast Autopilot + slow LLM reasoning), complex memories with gossip propagation, a functioning economy, and organic physiological needs influenced by a dynamic weather and chaos system.
-
----
-
-## 📑 Table of Contents
-
-- [Features](#-features)
-- [System Architecture](#-system-architecture)
-- [Installation](#-installation)
-- [Configuration](#-configuration)
-- [Usage & Controls](#-usage--controls)
-- [Project Structure](#-project-structure)
-- [Logic & Mechanics](#-logic--mechanics)
-- [Contributing](#-contributing)
-- [License](#-license)
+Agents possess a **Dual-Brain architecture** — a fast Autopilot for routine behaviour and slow LLM reasoning for novel situations — layered on top of real physiological drives, a functioning economy, gossip networks, and an interactive chaos/weather system.
 
 ---
 
-## ✨ Features
+## Table of Contents
 
-### 🧠 Cognitive & Social
-- **Dual-Brain Architecture (System 1 / System 2)**: Agents run on a fast "Autopilot" for routine tasks (fleeing fire, walking to known locations, eating when hungry). A Leaky Integrate-and-Fire (LIF) neuron integrates urgency, waking up the LLM (vLLM) only for complex, novel, or social situations.
-- **Advanced Memory & Gossip**: Agents remember interactions, hold grudges, form preferences (e.g., disliking a specific food after poisoning), and spread dynamic "Gossip" to one another that decays in accuracy over time.
-- **Active Reflection**: Agents can use a `REFLECT` action to permanently commit deductions, suspicions, or beliefs to their Long-Term Memory.
-- **Contextual Conversations**: The LLM is fed recent back-and-forth dialogue history, allowing for natural, multi-turn conversations influenced by trust and familiarity.
-
-### ⚖️ Living Economy
-- **Dynamic Markets & Wages**: Agents earn denarii by working (`WORK`) at role-appropriate buildings (e.g., Senators deliberate, Craftsmen forge). Markets restock periodically, and agents can `BUY` goods or `TRADE` with one another.
-- **Autonomous Crafting**: Craftsmen can gather raw materials and execute `CRAFT` actions to produce tools, weapons, and luxury goods to sell back into the economy.
-
-### 🌍 Dynamic World
-- **Historical Topography**: Procedural generation merged with historical layouts (Forum Romanum, Palatine Hill, Colosseum, Subura).
-- **Chaos Engine**: A physics-based system handling **Fire Propagation** (fuel/wind/burn rate), **Structural Integrity** (collapse risk), and **Weather Events** (Storms, Heatwaves).
-- **Physiological Feedback**: Agents literally "feel" the world. Searing pain from burns, shivering from rain, and starvation are fed directly into the LLM's prompt as first-person sensations.
-
-### ⚙️ Engine
-- **Hybrid CES Architecture**: Uses a Component-Entity-System for world objects (Flammable, Structural, Liquid, Interactable).
-- **Event Bus**: A decoupled global event system that delivers sensory information (speech, building collapses) to agents within physical range.
-- **Deep Inspection**: A zoomable camera system allows real-time introspection of agent states, inventory, internal monologues, and health via mouse hover.
-- **Persistence**: SQLite database integration automatically saves the exact state of the world, building damage, and agent memories.
+- [Features](#features)
+- [System Architecture](#system-architecture)
+- [Scenarios](#scenarios)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage & Controls](#usage--controls)
+- [Project Structure](#project-structure)
+- [Logic & Mechanics](#logic--mechanics)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## 🏗 System Architecture
+## Features
 
-The simulation runs on parallel loops to ensure performance:
+### Cognitive & Social
+- **Dual-Brain Architecture (System 1 / System 2)** — Agents run on a fast Autopilot for routine tasks (fleeing fire, walking to known locations, eating when hungry). A Leaky Integrate-and-Fire (LIF) neuron integrates urgency and wakes the LLM only for complex, novel, or social situations.
+- **Advanced Memory & Gossip** — Agents remember interactions, form preferences (e.g., disliking a food after being poisoned), and spread dynamic gossip that decays in accuracy over time.
+- **Active Reflection** — Agents can use `REFLECT` to permanently commit deductions or beliefs to long-term memory.
+- **Oracle / Temple System** — Agents can `PRAY` at temples; a renderer overlay accepts player-typed divine responses that affect the agent's memory and urgency.
 
-1.  **The Render Loop (Main Thread @ 60 FPS)**: Handles PyGame window drawing, input processing (WASD/Zoom), particle effects, and interpolates agent positions for smooth visuals.
-2.  **The Logic Loop (Sim Thread @ 10 TPS)**: Handles biological decay, the economy cycle, weather updates, and the Chaos Engine.
-3.  **The Event Bus**: Propagates localized events (sounds, sights) and global events (time of day).
+### Living Economy
+- **Dynamic Markets & Wages** — Agents earn denarii at role-appropriate workplaces. Markets restock periodically; agents can `BUY` goods or `TRADE` with one another.
+- **Crafting** — Craftsmen execute `CRAFT` actions to produce tools and goods from raw materials.
 
-**LLM Integration (`LLMWorker`)**:
-Requests are offloaded to an asynchronous `LLMWorker` thread. This worker maintains a queue of agents waiting for decisions, batches the context (Memory + Perception + Physiology), and sends it to the vLLM API without freezing the simulation.
+### Dynamic World
+- **Scenario System** — The engine is scenario-agnostic. Swap the active map by changing one line in `config.py`. Two scenarios are included: the full historical city of Rome (200×150 tiles) and the Flavian Amphitheatre gladiator arena (80×60 tiles).
+- **Historical Topography** — Procedural generation guided by historical layouts: Forum Romanum, Palatine Hill, Colosseum, Circus Maximus, Subura, Theatre of Marcellus.
+- **Chaos Engine** — Physics-based fire propagation (fuel/burn rate/wind), structural integrity (collapse risk), and weather events (storms, heatwaves, rain).
+- **Physiological Feedback** — Burns, starvation, and thirst are injected into the LLM prompt as first-person sensations.
+- **Rich Interactions** — Most world objects are interactable: pray at temples, drink from fountains, forage olives, rest in shade, read public records, or spectate events.
+
+### Engine
+- **ECS World Objects** — Component-Entity-System for buildings and decorations (`Flammable`, `Structural`, `Liquid`, `WaterFeature`, `Interactable`, …).
+- **A\* Pathfinding** — Road-biased A\* with partial-path fallback and per-agent novelty timeouts to prevent GOTO loops.
+- **Event Bus** — Decoupled event system delivering sensory information (speech, fire, collapses) to agents within physical range.
+- **Deep Inspection** — Mouse-hover tooltips and a full-screen agent window exposing prompt history, decision history, and internal monologue.
+- **Persistence** — Autosave/load via JSON serialisation (configurable interval).
+- **Session Logging** — Structured JSONL logging of every LLM call, agent state snapshot, and outcome for post-hoc analysis.
 
 ---
 
-## 🛠 Installation
+## System Architecture
+
+Three concurrent loops keep rendering smooth while the simulation and LLM run independently:
+
+1. **Render loop** (main thread, 60 FPS) — PyGame input, drawing, camera, particles. Reads engine state under `engine.lock`.
+2. **Sim loop** (called by renderer at 30 TPS) — Biology, economy, weather, chaos, and the dual-brain decision flow for each agent.
+3. **LLM worker** (daemon thread) — Asyncio event loop. Dequeues agents needing inference, calls the LLM API (Gemini or OpenAI-compatible), and applies decisions back to agents.
+
+All shared state is protected by `engine.lock` (a `threading.RLock`).
+
+**Per-agent decision flow each tick:**
+```
+update_biological() → LIF neuron fires?
+    ├─ No  → if path exists: autopilot._follow_path() → MOVE
+    └─ Yes → autopilot.decide()
+                 ├─ Returns decision → _execute_autopilot_decision()   (System 1)
+                 └─ Returns None     → agent.waiting_for_llm = True
+                                           └─ build_prompt() → LLM → _apply_decision()  (System 2)
+```
+
+---
+
+## Scenarios
+
+The scenario selected in `config.py` controls the map, initial agents, and animals. Switching requires a `--new-game` restart (save files are scenario-specific).
+
+### `rome` (default)
+Historical Rome c. 161 AD, during the reign of Marcus Aurelius. A 200×150 tile map covering roughly 1 km² of central Rome including:
+- Forum Romanum, Imperial Fora, Colosseum complex
+- Palatine and Capitoline Hills
+- Circus Maximus, Subura, Theatre of Marcellus
+- 455+ world objects, 8 named characters + legionary contubernium
+
+### `gladiator_arena`
+The Flavian Amphitheatre c. 80 AD — a compact 80×60 tile map focused on the arena itself:
+- Four elliptical terrain layers: outer wall → spectator concourse → inner podium wall → sand fighting floor
+- North/south entrance tunnels (Gate of Life / Gate of Death)
+- Armory (west) and Medical Tent (east) in the north forecourt
+- Spartacus, Crixus, Batiatus (lanista), Galen (physician), arena guards, wolves, and a boar
+
+To switch scenarios, edit `config.py`:
+```python
+SCENARIO = "gladiator_arena"  # or "rome"
+```
+
+Adding a new scenario means subclassing `BaseScenario` in `world/scenarios/` and registering it in `SCENARIO_REGISTRY`.
+
+---
+
+## Installation
 
 ### Prerequisites
-- Python 3.10 or higher.
-- A running instance of **vLLM** (or an OpenAI-compatible API endpoint).
+- Python 3.10 or higher
+- An LLM backend — either a **Gemini API key** (default, zero local setup) or a running **OpenAI-compatible endpoint** such as vLLM
 
 ### Steps
 
-1.  **Clone the Repository**
-    ```bash
-    git clone [https://github.com/your-username/rome-aeterna.git](https://github.com/your-username/rome-aeterna.git)
-    cd rome-aeterna
-    ```
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your-username/rome-aeterna.git
+   cd rome-aeterna
+   ```
 
-2.  **Create a Virtual Environment**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+2. **Create a virtual environment and install**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate   # Windows: venv\Scripts\activate
+   pip install -e .
+   ```
 
-3.  **Install Dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
+3. **Configure your LLM backend** (see [Configuration](#configuration))
 
-4.  **Start vLLM (Optional but Recommended)**
-    If you want the agents to have actual AI intelligence, run a local LLM server:
-    ```bash
-    python -m venv vllm_env
-    source vllm_env/bin/activate
-    pip install vllm
-    python -m vllm.entrypoints.api_server --model mistralai/Mistral-7B-Instruct-v0.2 --port 8000
-    ```
+   **Option A — Gemini** (default, requires API key):
+   ```bash
+   export GEMINI_API_KEY="your-key-here"
+   ```
+
+   **Option B — Local vLLM** (GPU required):
+   ```bash
+   pip install vllm
+   python -m vllm.entrypoints.api_server \
+       --model Qwen/Qwen3-8B-AWQ \
+       --port 8000
+   export LLM_PROVIDER=openai
+   ```
 
 ---
 
-## ⚙ Configuration
+## Configuration
 
-Global settings can be modified in `src/roma_aeterna/config.py`.
+All global tuning lives in `src/roma_aeterna/config.py`. Key settings:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `GRID_WIDTH` | 200 | Width of the generated map in tiles. |
-| `TILE_SIZE` | 16 | Base pixel size of a single tile. |
-| `TPS` | 10 | Ticks Per Second. Controls simulation speed. |
-| `VLLM_URL` | `http://localhost:8000/v1` | URL for the LLM inference server. |
-| `VLLM_MODEL` | `mistralai/...` | Model string to query. |
+| `SCENARIO` | `"rome"` | Active scenario: `"rome"` or `"gladiator_arena"` |
+| `N_AGENTS` | `2` | Random citizens to spawn on top of named characters |
+| `TPS` | `30` | Simulation ticks per second |
+| `GRID_WIDTH` / `GRID_HEIGHT` | `200` / `150` | Default map dimensions (Rome scenario) |
+| `TILE_SIZE` | `16` | Base pixel size of one tile |
+| `LLM_PROVIDER` | `"gemini"` | `"gemini"` or `"openai"` (any OpenAI-compat endpoint) |
+| `LLM_MODEL` | `"gemini-flash-lite-latest"` | Model identifier passed to the provider |
+| `LLM_BASE_URL` | `"http://localhost:8000/v1"` | Base URL for OpenAI-compat provider |
+| `PERCEPTION_RADIUS` | `8` | Tiles an agent can see |
+| `RANDOM_SEED` | `755` | Procedural generation seed |
+
+Environment variables override config at runtime:
+```bash
+export LLM_PROVIDER=openai
+export LLM_MODEL=Qwen/Qwen3-4B-AWQ
+export LLM_BASE_URL=http://localhost:8000/v1
+```
 
 ---
 
-## 🎮 Usage & Controls
-
-Run the simulation entry point:
+## Usage & Controls
 
 ```bash
-python -m src.roma_aeterna.main
+python -m roma_aeterna.main              # Resume from autosave
+python -m roma_aeterna.main --new-game   # Delete save and start fresh
 ```
-*(To force a fresh world and delete the autosave, run with `--new-game`)*
 
-### Keyboard & Mouse Controls
+### Keyboard & Mouse
 
 | Input | Action |
 | :--- | :--- |
-| **W, A, S, D** | Pan the camera around the map. |
-| **Scroll Wheel** | Zoom In / Zoom Out (0.5x to 4.0x). |
-| **Mouse Hover** | Inspect an entity. Hover over an agent to see their Health, Drives, Inventory, Autopilot state, and internal Thought. |
-| **Left Click** | *(New)* Open the full context inspection window for an agent to read their prompt. |
-| **ESC** | Save and Quit the simulation. |
+| **W A S D** | Pan camera |
+| **Scroll Wheel** | Zoom in / out (0.5× – 4.0×) |
+| **Mouse Hover** | Inspect entity — shows health, drives, inventory, and last thought |
+| **Right Click** on agent | Context menu — open prompt view or decision history |
+| **Left Click** on agent | Open full agent inspection window |
+| **ESC** | Close inspection window / quit |
 
-![Agent Inspection Window](assets/screenshots/inspect_agent.png)
+### Session Log Viewer
 
----
+Every LLM call and agent state snapshot is logged to `logs/session.jsonl`:
 
-## 📂 Project Structure
-
-```text
-rome-aeterna/
-├── src/
-│   ├── agent/              # Agent Logic (Dual-Brain)
-│   │   ├── base.py         # Main Agent Class (Biology, State)
-│   │   ├── autopilot.py    # System 1: Fast routine decision making
-│   │   ├── memory.py       # Theory of Mind, Preferences, Gossip
-│   │   ├── neuro.py        # LIF Neuron for urgency/LLM firing
-│   │   └── status_effects.py # Physiological sensations
-│   ├── core/               # Core Infrastructure
-│   │   ├── events.py       # Global/Local Event Bus
-│   │   ├── persistence.py  # SQLite Save/Load system
-│   │   └── logger.py       # Structured Logging
-│   ├── engine/             # Simulation Physics & Rules
-│   │   ├── loop.py         # The Tick Orchestrator
-│   │   ├── economy.py      # Wages, Markets, Supply/Demand
-│   │   ├── chaos.py        # Fire & Destruction Physics
-│   │   └── weather.py      # Climate & Day/Night System
-│   ├── gui/                # Visualization (PyGame)
-│   │   ├── renderer.py     # Rendering, Shadows, Particles
-│   │   ├── camera.py       # Coordinate Transformation
-│   │   └── assets.py       # Color Palettes & Procedural Sprites
-│   ├── llm/                # AI Integration
-│   │   ├── worker.py       # Async Batching for Inference
-│   │   └── prompts.py      # Context Injection & Persona Templates
-│   └── world/              # Environment
-│       ├── generator.py    # Map & Landmark Generation
-│       ├── map.py          # Grid Data Structures
-│       ├── items.py        # Items, Crafting Recipes, Spoilage
-│       ├── objects.py      # Building Prefabs
-│       └── components.py   # Component System Classes
-├── logs/                   # Auto-generated runtime logs
-├── saves/                  # SQLite autosave databases
-├── pyproject.toml          # Packaging
-└── requirements.txt        # Python Dependencies
+```bash
+python -m roma_aeterna.tools.log_viewer logs/session.jsonl
+python -m roma_aeterna.tools.log_viewer logs/session.jsonl --agent "Marcus Aurelius"
+python -m roma_aeterna.tools.log_viewer logs/session.jsonl --type llm_response
+python -m roma_aeterna.tools.log_viewer logs/session.jsonl --summary
+python -m roma_aeterna.tools.log_viewer logs/session.jsonl --failures
 ```
 
 ---
 
-## 🧠 Logic & Mechanics
+## Project Structure
 
-### The Dual-Brain System (`src/agent/autopilot.py` & `src/llm/worker.py`)
-Agents don't rely entirely on the LLM. 
-1. The **Autopilot** checks if the agent is burning, starving, or currently following a multi-step path (`GOTO`). If it can handle the situation, the LLM is never called.
-2. The **LIF Neuron** accumulates urgency based on physical needs, pending conversations, and environmental factors. When the threshold is crossed, it queues an LLM request.
-3. The **LLM** reads a highly contextual prompt (including exactly how the agent physically feels) and returns JSON deciding to `WORK`, `CRAFT`, `BUY`, `TALK`, or `REFLECT`.
-
-### The Chaos Engine (`src/engine/chaos.py`)
-The environment is not static.
-1.  **Weather**: Runs on a cycle (Sunny -> Rain -> Storm). Heatwaves increase thirst decay; Rain suppresses fire and makes agents cold.
-2.  **Fire**: Objects with the `Flammable` component have a `fuel` and `burn_rate`. Fire spreads based on wind speed and proximity.
-3.  **Collapse**: Objects with the `Structural` component take damage from Fire or Storms. If `hp <= 0`, they turn into Rubble.
+```text
+roma_aeterna/
+├── src/
+│   └── roma_aeterna/
+│       ├── main.py                  # Entry point — scenario selection and startup
+│       ├── config.py                # All global tuning parameters
+│       ├── agent/
+│       │   ├── base.py              # Agent state (biology, inventory, position)
+│       │   ├── autopilot.py         # System 1 — fast routine decisions
+│       │   ├── neuro.py             # Leaky Integrate-and-Fire neuron
+│       │   ├── memory.py            # Short/long-term memory, gossip, locations
+│       │   ├── perception.py        # PerceptionSystem — scans nearby objects/agents
+│       │   ├── pathfinding.py       # A* pathfinder with road bias
+│       │   ├── interactions.py      # execute_interaction() — all itype branches
+│       │   ├── recording.py         # DecisionRecorder — prompt/LLM/history logs
+│       │   ├── status_effects.py    # StatusEffectManager — multipliers and bonuses
+│       │   ├── constants.py         # VALID_ACTIONS, DIRECTION_DELTAS
+│       │   └── animal.py            # Animal agents (wolf, dog, boar, raven)
+│       ├── core/
+│       │   ├── events.py            # EventBus — localised and global events
+│       │   └── persistence.py       # JSON autosave / load
+│       ├── engine/
+│       │   ├── loop.py              # SimulationEngine — tick orchestrator
+│       │   ├── economy.py           # Wages, markets, restocking
+│       │   ├── chaos.py             # Fire propagation, structural damage
+│       │   └── weather.py           # Climate and day/night cycle
+│       ├── gui/
+│       │   ├── renderer.py          # PyGame rendering — tiles, objects, agents, UI
+│       │   ├── camera.py            # Coordinate transforms and pan/zoom
+│       │   └── assets.py            # Color palettes and procedural sprites
+│       ├── llm/
+│       │   ├── worker.py            # LLMWorker — async batching and dispatch
+│       │   ├── actions.py           # ActionExecutor — all 16 action handlers
+│       │   ├── prompts.py           # build_prompt() — 6-zone context assembly
+│       │   ├── personalities.py     # Personality templates and starting inventories
+│       │   ├── parser.py            # JSON extraction from raw LLM output
+│       │   └── mock.py              # MockDecisionMaker — fallback when LLM unavailable
+│       ├── world/
+│       │   ├── generator.py         # WorldGenerator — 14-phase historical Rome map
+│       │   ├── map.py               # GameMap and Tile data structures
+│       │   ├── objects.py           # WorldObject and 50+ building prefabs
+│       │   ├── components.py        # ECS components (Flammable, Structural, …)
+│       │   ├── items.py             # Item, Recipe, ItemDatabase
+│       │   └── scenarios/
+│       │       ├── base.py          # BaseScenario abstract class
+│       │       ├── rome.py          # RomeScenario — full historical city
+│       │       ├── arena.py         # GladiatorArenaScenario — Colosseum arena
+│       │       └── _utils.py        # Shared name generator and spawn-point finder
+│       └── tools/
+│           ├── log_viewer.py        # CLI log analysis tool
+│           ├── agent_logger.py      # Background JSONL logger
+│           └── agent_diagnostics.py # Terminal diagnostics (every N seconds)
+├── logs/                            # Runtime session logs (JSONL)
+├── saves/                           # Autosave files
+└── pyproject.toml                   # Package metadata and dependencies
+```
 
 ---
 
-## 🤝 Contributing
+## Logic & Mechanics
 
-Contributions are welcome! Please follow these steps:
-1.  Fork the repository.
-2.  Create a feature branch (`git checkout -b feature/AmazingFeature`).
-3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4.  Push to the branch (`git push origin feature/AmazingFeature`).
-5.  Open a Pull Request.
+### The Dual-Brain System
+
+Agents don't call the LLM every tick — most decisions are handled locally:
+
+1. **Autopilot** checks for critical needs (fire nearby, thirst > 70, hunger > 70, energy > 85) and handles them using memorised locations. If the agent is mid-journey it continues following the A\* path.
+2. **LIF Neuron** accumulates weighted urgency from drives (hunger, thirst, social, energy) plus environmental signals (fire proximity, night outdoors, nearby critical agents). When potential ≥ role-specific threshold it fires and escalates to the LLM.
+3. **LLM** receives a structured 6-zone prompt (identity → state → world → recent past → mind → conscience) and returns a JSON decision: `WORK`, `CRAFT`, `BUY`, `TRADE`, `TALK`, `GOTO`, `REFLECT`, `PRAY`, `ATTACK`, etc.
+
+### Prompt Structure
+
+Six named zones are assembled per LLM call:
+1. **WHO YOU ARE** — identity, personality, goals, fears, world rules
+2. **YOUR STATE** — health/drives/position, current action, inventory
+3. **THE WORLD** — nearby buildings/agents, market listings if applicable, incoming conversation
+4. **RECENT PAST** — decision history, event outcomes, drive trends
+5. **YOUR MIND** — important memories, recent memories, personal notes, relationships, known locations
+6. **YOUR CONSCIENCE** — urgency warnings, stagnation hints, vita activa encouragement
+
+### Chaos Engine
+
+The environment degrades and reacts:
+- **Weather** cycles through Sunny → Rain → Storm (each lasting 1.7–6.7 minutes at TPS=30). Heatwaves accelerate thirst; rain suppresses fire.
+- **Fire** spreads between `Flammable` objects based on fuel, burn rate, and proximity. Decorative torches are flagged `is_decorative` and ignored by the chaos engine.
+- **Collapse** — `Structural` objects take damage from fire and storms; at 0 HP they become rubble.
+
+### Memory
+
+Each agent has a short-term cap (20) and long-term cap (50). When short-term overflows, the lowest-importance entry is evicted (promoted to long-term if importance ≥ 3.0, else discarded). Walk events (importance 0.5) are filtered from the prompt to prevent noise drowning out conversations and purchases.
 
 ---
 
-## 📜 License
+## Contributing
+
+Contributions are welcome. Please:
+1. Fork the repository.
+2. Create a feature branch (`git checkout -b feature/your-feature`).
+3. Commit your changes (`git commit -m 'Add your feature'`).
+4. Push and open a Pull Request.
+
+---
+
+## License
 
 Distributed under the MIT License. See `LICENSE` for more information.

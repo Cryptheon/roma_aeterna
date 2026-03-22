@@ -30,10 +30,11 @@ class Renderer:
         
         self.engine = engine
         self.clock = pygame.time.Clock()
-        self.camera = Camera(GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE)
-        
-        # Center camera on the Forum area
-        self.camera.center_on(90, 55)
+        self.camera = Camera(engine.world.width * TILE_SIZE, engine.world.height * TILE_SIZE)
+
+        # Center camera on the scenario's designated focus point
+        cx, cy = getattr(engine.world, 'camera_start', (engine.world.width // 2, engine.world.height // 2))
+        self.camera.center_on(cx, cy)
         
         # Initialize sprite system
         SpriteSheet.init(TILE_SIZE)
@@ -53,8 +54,8 @@ class Renderer:
         # Cached terrain color variations
         self._terrain_noise = {}
         random.seed(RANDOM_SEED + 1)
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
+        for y in range(engine.world.height):
+            for x in range(engine.world.width):
                 self._terrain_noise[(x, y)] = random.randint(-8, 8)
         
         # Tooltip state
@@ -157,8 +158,8 @@ class Renderer:
                     if event.button == 1 and _mm_rect.collidepoint(event.pos):
                         _rel_x = event.pos[0] - (SCREEN_WIDTH - 150)
                         _rel_y = event.pos[1] - 42
-                        _gx = _rel_x / 140 * GRID_WIDTH
-                        _gy = _rel_y / 105 * GRID_HEIGHT
+                        _gx = _rel_x / 140 * self.engine.world.width
+                        _gy = _rel_y / 105 * self.engine.world.height
                         self.camera.center_on(_gx, _gy, instant=False)
                         continue
 
@@ -227,8 +228,8 @@ class Renderer:
             min_x, min_y, max_x, max_y = self.camera.get_visible_bounds()
             min_x = max(0, min_x)
             min_y = max(0, min_y)
-            max_x = min(GRID_WIDTH, max_x)
-            max_y = min(GRID_HEIGHT, max_y)
+            max_x = min(self.engine.world.width, max_x)
+            max_y = min(self.engine.world.height, max_y)
             
             self._render_terrain(min_x, min_y, max_x, max_y)
             self._render_ground_decorations(min_x, min_y, max_x, max_y)
@@ -1186,12 +1187,12 @@ class Renderer:
         pygame.draw.rect(mm_surf, COLORS["ui_border_gold"],
                          (0, 0, mm_w, mm_h), 1)
         
-        sx_scale = mm_w / GRID_WIDTH
-        sy_scale = mm_h / GRID_HEIGHT
-        
-        step = max(1, GRID_WIDTH // mm_w)
-        for y in range(0, GRID_HEIGHT, step):
-            for x in range(0, GRID_WIDTH, step):
+        sx_scale = mm_w / self.engine.world.width
+        sy_scale = mm_h / self.engine.world.height
+
+        step = max(1, self.engine.world.width // mm_w)
+        for y in range(0, self.engine.world.height, step):
+            for x in range(0, self.engine.world.width, step):
                 tile = self.engine.world.get_tile(x, y)
                 if not tile:
                     continue
@@ -1224,8 +1225,8 @@ class Renderer:
         vb = self.camera.get_visible_bounds()
         vx1 = int(max(0, vb[0]) * sx_scale)
         vy1 = int(max(0, vb[1]) * sy_scale)
-        vx2 = int(min(GRID_WIDTH, vb[2]) * sx_scale)
-        vy2 = int(min(GRID_HEIGHT, vb[3]) * sy_scale)
+        vx2 = int(min(self.engine.world.width, vb[2]) * sx_scale)
+        vy2 = int(min(self.engine.world.height, vb[3]) * sy_scale)
         pygame.draw.rect(mm_surf, (255, 255, 255, 150),
                          (vx1, vy1, vx2 - vx1, vy2 - vy1), 1)
         
