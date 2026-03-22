@@ -140,7 +140,7 @@ class Animal:
                       if not getattr(a, "is_animal", False) and a.is_alive]
             if humans:
                 nearest = min(humans, key=lambda a: _dist(self, a))
-                self._move_away_from(nearest.x, nearest.y, world)
+                self._move_away_from(nearest.x, nearest.y, world, agents)
                 self.action = "FLEEING"
             return
 
@@ -161,13 +161,13 @@ class Animal:
                     )
                     return
                 if d <= WOLF_DAY_AGGRO_RADIUS:
-                    self._move_toward(nearest.x, nearest.y, world)
+                    self._move_toward(nearest.x, nearest.y, world, agents)
                     self.action = "STALKING"
                     return
             if random.random() < 0.75:
                 self.action = "RESTING"
                 return
-            self._wander(world)
+            self._wander(world, agents)
             return
 
         # Nighttime: pack cohesion first
@@ -181,7 +181,7 @@ class Animal:
             cx = sum(w.x for w in pack_nearby) / len(pack_nearby)
             cy = sum(w.y for w in pack_nearby) / len(pack_nearby)
             if _dist_xy(self.x, self.y, cx, cy) > 3.0:
-                self._move_toward(cx, cy, world)
+                self._move_toward(cx, cy, world, agents)
                 self.action = "MOVING"
                 return
 
@@ -189,7 +189,7 @@ class Animal:
         humans = [a for a in agents
                   if not getattr(a, "is_animal", False) and a.is_alive]
         if not humans:
-            self._wander(world)
+            self._wander(world, agents)
             return
 
         target = min(humans, key=lambda a: _dist(self, a))
@@ -204,10 +204,10 @@ class Animal:
                 + (" You are dying." if target.health < 20 else ""),
             )
         elif d <= WOLF_NIGHT_AGGRO_RADIUS:
-            self._move_toward(target.x, target.y, world)
+            self._move_toward(target.x, target.y, world, agents)
             self.action = "HUNTING"
         else:
-            self._wander(world)
+            self._wander(world, agents)
 
     def _dog_tick(self, world: Any, agents: List[Any], is_night: bool) -> None:
         # Flee nearby wolves
@@ -217,7 +217,7 @@ class Animal:
         ]
         nearby_wolf = next((w for w in wolves if _dist(self, w) < 6.0), None)
         if nearby_wolf:
-            self._move_away_from(nearby_wolf.x, nearby_wolf.y, world)
+            self._move_away_from(nearby_wolf.x, nearby_wolf.y, world, agents)
             self.action = "FLEEING"
             return
 
@@ -225,7 +225,7 @@ class Animal:
         if random.random() < 0.6:
             self.action = "RESTING"
         else:
-            self._wander(world)
+            self._wander(world, agents)
 
     def _boar_tick(self, world: Any, agents: List[Any], is_night: bool) -> None:
         humans = [a for a in agents
@@ -244,16 +244,16 @@ class Animal:
                     + (" You are dying." if target.health < 20 else ""),
                 )
             else:
-                self._move_toward(target.x, target.y, world)
+                self._move_toward(target.x, target.y, world, agents)
                 self.action = "CHARGING"
         else:
             if random.random() < 0.5:
                 self.action = "RESTING"
             else:
-                self._wander(world)
+                self._wander(world, agents)
 
     def _raven_tick(self, world: Any, agents: List[Any], is_night: bool) -> None:
-        self._wander(world)
+        self._wander(world, agents)
         self.action = "FLYING"
 
     # ================================================================
@@ -283,24 +283,31 @@ class Animal:
     # MOVEMENT HELPERS
     # ================================================================
 
-    def _move_toward(self, tx: float, ty: float, world: Any) -> None:
+    def _move_toward(self, tx: float, ty: float, world: Any,
+                     agents: Optional[List[Any]] = None) -> None:
         dx, dy = tx - self.x, ty - self.y
         step_x = (1 if dx > 0 else -1) if abs(dx) > 0.5 else 0
         step_y = (1 if dy > 0 else -1) if abs(dy) > 0.5 else 0
         nx, ny = self.x + step_x, self.y + step_y
         tile = world.get_tile(int(nx), int(ny))
         if tile and tile.is_walkable:
+            if agents and any(
+                a is not self and getattr(a, "is_alive", True)
+                and int(a.x) == int(nx) and int(a.y) == int(ny)
+                for a in agents
+            ):
+                return  # tile occupied — don't stack
             self.x, self.y = nx, ny
 
-    def _move_away_from(self, tx: float, ty: float, world: Any) -> None:
-        # Reflect direction through self
-        self._move_toward(self.x * 2 - tx, self.y * 2 - ty, world)
+    def _move_away_from(self, tx: float, ty: float, world: Any,
+                        agents: Optional[List[Any]] = None) -> None:
+        self._move_toward(self.x * 2 - tx, self.y * 2 - ty, world, agents)
 
-    def _wander(self, world: Any) -> None:
+    def _wander(self, world: Any, agents: Optional[List[Any]] = None) -> None:
         # If outside home range, step back toward home instead of wandering freely
         if (self.home_x is not None and self.home_radius is not None
                 and _dist_xy(self.x, self.y, self.home_x, self.home_y) > self.home_radius):
-            self._move_toward(self.home_x, self.home_y, world)
+            self._move_toward(self.home_x, self.home_y, world, agents)
             self.action = "WANDERING"
             return
         dx, dy = random.choice([
@@ -310,5 +317,12 @@ class Animal:
         nx, ny = self.x + dx, self.y + dy
         tile = world.get_tile(int(nx), int(ny))
         if tile and tile.is_walkable:
-            self.x, self.y = nx, ny
+            if agents and any(
+                a is not self and getattr(a, "is_alive", True)
+                and int(a.x) == int(nx) and int(a.y) == int(ny)
+                for a in agents
+            ):
+                pass  # tile occupied — stay put this tick
+            else:
+                self.x, self.y = nx, ny
         self.action = "WANDERING"

@@ -64,6 +64,29 @@ class ActionExecutor:
 
     def _handle_move(self, agent: Any, decision: Dict, tick: int) -> None:
         direction = decision.get("direction", "north")
+
+        # Check tile occupancy before attempting the move.
+        from roma_aeterna.agent.constants import DIRECTION_DELTAS
+        delta = DIRECTION_DELTAS.get(direction.lower().strip(), None)
+        if delta is not None:
+            nx, ny = int(agent.x) + delta[0], int(agent.y) + delta[1]
+            occupant = next(
+                (a for a in self.engine.agents
+                 if a is not agent and getattr(a, "is_alive", True)
+                 and int(a.x) == nx and int(a.y) == ny),
+                None,
+            )
+            if occupant:
+                agent.autopilot._consecutive_path_blocks += 1
+                agent.memory.add_event(
+                    f"The path {direction} is blocked by {occupant.name}.",
+                    tick=tick, importance=1.0, tags=["blocked"],
+                )
+                if agent.autopilot._consecutive_path_blocks >= 3:
+                    agent.autopilot.clear_path()
+                agent.action = "IDLE"
+                return
+
         success, msg = agent.move(direction, self.engine.world)
         if success:
             agent.autopilot._consecutive_path_blocks = 0
