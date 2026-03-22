@@ -114,34 +114,33 @@ Adding a new scenario means subclassing `BaseScenario` in `world/scenarios/` and
 
 ### Steps
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/your-username/rome-aeterna.git
-   cd rome-aeterna
-   ```
+1.  **Clone the Repository**
+    ```bash
+    git clone [https://github.com/your-username/rome-aeterna.git](https://github.com/your-username/rome-aeterna.git)
+    cd rome-aeterna
+    ```
 
-2. **Create a virtual environment and install**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # Windows: venv\Scripts\activate
-   pip install -e .
-   ```
+2.  **Create a Virtual Environment**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
-3. **Configure your LLM backend** (see [Configuration](#configuration))
+3.  **Install Dependencies**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-   **Option A — Gemini** (default, requires API key):
-   ```bash
-   export GEMINI_API_KEY="your-key-here"
-   ```
-
-   **Option B — Local vLLM** (GPU required):
-   ```bash
-   pip install vllm
-   python -m vllm.entrypoints.api_server \
-       --model Qwen/Qwen3-8B-AWQ \
-       --port 8000
-   export LLM_PROVIDER=openai
-   ```
+4.  **Start vLLM**
+    If you want the agents to have actual AI intelligence, run a local LLM server:
+    ```bash
+    vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 \
+      --download-dir "/path/to/your/models" \
+      --port 8000 \
+      --max-model-len 4096 \
+      --gpu-memory-utilization 0.9 \
+      --max-num-seqs 16 
+    ```
 
 ---
 
