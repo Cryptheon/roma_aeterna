@@ -75,10 +75,10 @@ def create_effect(name: str, **kwargs) -> Optional[StatusEffect]:
         ),
         "heatstroke": StatusEffect(
             "Heatstroke", "The sun is merciless. Thirst and exhaustion accelerate.",
-            duration_ticks=150,
+            duration_ticks=300,
             stat_modifiers={"thirst_rate": 2.5, "energy_rate": 2.0, "speed": -0.2},
             tags=["weather", "negative", "dangerous"],
-            urgency_weight=12.0,
+            urgency_weight=5.0,
             sensation="Your head pounds. The world swims. You desperately need water and shade.",
         ),
         "chilled": StatusEffect(
