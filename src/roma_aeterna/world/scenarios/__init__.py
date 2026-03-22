@@ -16,12 +16,14 @@ from .rome import RomeScenario
 from .arena import GladiatorArenaScenario
 from .curia import CuriaPompeiScenario
 from .sack import SackOfRomeScenario
+from .gladiator_fight import GladiatorFightScenario
 
 SCENARIO_REGISTRY: dict = {
     "rome": RomeScenario,
     "gladiator_arena": GladiatorArenaScenario,
     "curia_pompei": CuriaPompeiScenario,
     "sack_of_rome": SackOfRomeScenario,
+    "gladiator_fight": GladiatorFightScenario,
 }
 
 

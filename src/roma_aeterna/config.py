@@ -6,8 +6,8 @@ import os
 
 # --- Scenario ---
 # Which simulation environment to load.
-# Available: "rome" | "gladiator_arena" | "curia_pompei" | "sack_of_rome"
-SCENARIO: str = "sack_of_rome"
+# Available: "rome" | "gladiator_arena" | "curia_pompei" | "sack_of_rome" | "gladiator_fight"
+SCENARIO: str = "gladiator_fight"
 
 # --- Population ---
 N_AGENTS: int = 1                  # Total number of citizens to spawn
