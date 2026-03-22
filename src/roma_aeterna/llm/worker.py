@@ -118,6 +118,12 @@ class LLMWorker(threading.Thread):
 
             parsed = parse_json(content)
 
+            # Record tick for the timeline graph (thread-safe append, capped)
+            ticks = self.engine.llm_call_ticks
+            ticks.append(agent.sim_tick)
+            if len(ticks) > 2000:
+                del ticks[:500]
+
             if parsed:
                 agent.record_llm_response(content, parsed)
             else:

@@ -269,10 +269,15 @@ class GladiatorArenaScenario(BaseScenario):
 
         # Named characters with arena-appropriate positions
         named = [
-            Agent("Spartacus",       "Gladiator", _CX - 5,  _CY - 4),
-            Agent("Crixus",          "Gladiator", _CX + 5,  _CY - 4),
-            Agent("Batiatus",        "Merchant",  14,        _FORECOURT_MID_Y),
-            Agent("Galen",           "Craftsman", _W - 14,   _FORECOURT_MID_Y),
+            # Gladiators — spread across the sand floor
+            Agent("Spartacus",  "Gladiator", _CX - 5,  _CY - 4),
+            Agent("Crixus",     "Gladiator", _CX + 5,  _CY - 4),
+            Agent("Flamma",     "Gladiator", _CX - 10, _CY + 4),
+            Agent("Vercinix",   "Gladiator", _CX + 10, _CY + 4),
+            Agent("Tetraites",  "Gladiator", _CX,      _CY - 8),
+            # Support staff in the forecourt
+            Agent("Batiatus",   "Merchant",  14,        _FORECOURT_MID_Y),
+            Agent("Galen",      "Craftsman", _W - 14,   _FORECOURT_MID_Y),
         ]
 
         agents = list(named)
@@ -290,7 +295,7 @@ class GladiatorArenaScenario(BaseScenario):
                 x, y = find_spawn_point(world, role, used_positions, _ROLE_SPAWN_ZONES)
                 agents.append(Agent(name, role, x, y))
 
-        # Arena guards — 4 soldiers patrolling the tunnel entrances
+        # Arena guards — 6 soldiers: tunnel entrances + east/west flanks
         agents.extend(self._create_arena_guards())
         return agents
 
@@ -298,21 +303,32 @@ class GladiatorArenaScenario(BaseScenario):
     def _create_arena_guards():
         from roma_aeterna.agent.base import Agent
         guard_data = [
-            ("Gaius Carbo",     _CX - 4, _CY - _OUTER_RY - 2),
-            ("Lucius Capito",   _CX + 4, _CY - _OUTER_RY - 2),
-            ("Marcus Fuscus",   _CX - 4, _CY + _OUTER_RY + 2),
-            ("Publius Scaeva",  _CX + 4, _CY + _OUTER_RY + 2),
+            # North tunnel entrance
+            ("Gaius Carbo",    _CX - 4,           _CY - _OUTER_RY - 2),
+            ("Lucius Capito",  _CX + 4,           _CY - _OUTER_RY - 2),
+            # South tunnel entrance
+            ("Marcus Fuscus",  _CX - 4,           _CY + _OUTER_RY + 2),
+            ("Publius Scaeva", _CX + 4,           _CY + _OUTER_RY + 2),
+            # East and west flanks of the arena wall
+            ("Titus Labienus", _CX - _WALL_RX - 3, _CY),
+            ("Quintus Balbus", _CX + _WALL_RX + 3, _CY),
         ]
         return [Agent(name, "Guard (Legionary)", x, y) for name, x, y in guard_data]
 
     def create_animals(self, world) -> list:
         from roma_aeterna.agent.animal import Animal
         animals = []
-        # Arena beasts — placed near the south tunnel (Gate of Death)
-        for i, (x, y) in enumerate([(_CX - 6, _CY + 10), (_CX + 6, _CY + 10)]):
-            animals.append(Animal("wolf",  x, y, f"Arena Wolf {i + 1}"))
-        for i, (x, y) in enumerate([(_CX, _CY + 8)]):
-            animals.append(Animal("boar",  x, y, f"Arena Boar {i + 1}"))
+        # Four wolves — south pair near Gate of Death, north pair flanking the sand
+        wolf_positions = [
+            (_CX - 6,  _CY + 10),   # south-west
+            (_CX + 6,  _CY + 10),   # south-east
+            (_CX - 12, _CY - 2),    # west side of sand
+            (_CX + 12, _CY - 2),    # east side of sand
+        ]
+        for i, (x, y) in enumerate(wolf_positions):
+            animals.append(Animal("wolf", x, y, f"Arena Wolf {i + 1}"))
+        # Boar — centre of the arena floor
+        animals.append(Animal("boar", _CX, _CY + 8, "Arena Boar 1"))
         # Raven — perched above the arena
         animals.append(Animal("raven", _CX, 3, "Raven"))
         return animals

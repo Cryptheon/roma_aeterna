@@ -100,6 +100,10 @@ class Renderer:
         self._music_idx: int = 0
         self._init_music()
 
+        # --- Pause menu ---
+        from .pause_menu import PauseMenu
+        self._pause_menu = PauseMenu(self)
+
     # ================================================================
     # MUSIC
     # ================================================================
@@ -184,6 +188,16 @@ class Renderer:
                             self._oracle_input += event.unicode
                     continue  # block all other events while modal is active
 
+                # --- Spacebar: toggle pause (always available) ---
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    self.engine.paused = not self.engine.paused
+                    continue
+
+                # --- Pause menu intercepts all remaining input when paused ---
+                if self.engine.paused:
+                    self._pause_menu.handle_event(event)
+                    continue
+
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
@@ -246,18 +260,21 @@ class Renderer:
                     self.camera.handle_event(event)
 
             self.camera.update(dt)
-            
+
             # --- Fixed tick rate: sim runs at TPS, render at FPS ---
-            self._sim_accumulator += dt
-            while self._sim_accumulator >= self._sim_dt:
-                self.engine.update(self._sim_dt)
-                self._sim_accumulator -= self._sim_dt
-            
-            self.time_of_day = (self.time_of_day + dt / DAY_LENGTH_TICKS * TPS) % 1.0
+            if not self.engine.paused:
+                self._sim_accumulator += dt
+                while self._sim_accumulator >= self._sim_dt:
+                    self.engine.update(self._sim_dt)
+                    self._sim_accumulator -= self._sim_dt
+                self.time_of_day = (self.time_of_day + dt / DAY_LENGTH_TICKS * TPS) % 1.0
+
             self._update_particles(dt)
             self._update_hover(mx, my)
 
             self._draw_frame(mx, my)
+            if self.engine.paused:
+                self._pause_menu.draw()
             pygame.display.flip()
 
         pygame.quit()

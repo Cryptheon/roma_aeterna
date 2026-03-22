@@ -17,6 +17,7 @@ from typing import Any, List, Optional
 from .status_effects import StatusEffectManager
 from roma_aeterna.config import (
     WOLF_PACK_RADIUS, WOLF_ATTACK_RANGE, WOLF_NIGHT_AGGRO_RADIUS,
+    WOLF_DAY_AGGRO_RADIUS,
     WOLF_DAMAGE, DOG_DAMAGE, BOAR_AGGRO_RADIUS, BOAR_DAMAGE,
     MOVEMENT_TICKS_PER_TILE,
 )
@@ -26,8 +27,8 @@ from roma_aeterna.config import (
 # proportional to human walking speed regardless of TPS tuning.
 _M = MOVEMENT_TICKS_PER_TILE
 ANIMAL_STATS = {
-    "wolf":  {"health": 60.0, "speed_interval": _M},        # same as road pace — fast predator
-    "dog":   {"health": 40.0, "speed_interval": _M + 6},    # slightly slower
+    "wolf":  {"health": 60.0, "speed_interval": _M * 2},    # deliberate — acts every ~1s at TPS=30
+    "dog":   {"health": 40.0, "speed_interval": _M + 6},    # slightly slower than human road pace
     "boar":  {"health": 80.0, "speed_interval": _M + 10},   # heavy, slow
     "raven": {"health": 20.0, "speed_interval": _M - 4},    # quick, light
 }
@@ -138,8 +139,26 @@ class Animal:
                 self.action = "FLEEING"
             return
 
-        # Daytime: mostly rest, occasional wander
+        # Daytime: mostly rest — but will snap if something walks too close
         if not is_night:
+            humans = [a for a in agents
+                      if not getattr(a, "is_animal", False) and a.is_alive]
+            if humans:
+                nearest = min(humans, key=lambda a: _dist(self, a))
+                d = _dist(self, nearest)
+                if d <= WOLF_ATTACK_RANGE:
+                    nearest.take_damage(WOLF_DAMAGE)
+                    self.action = "ATTACKING"
+                    self._notify_victim(
+                        nearest,
+                        f"A wolf snapped at you! You took {WOLF_DAMAGE:.0f} damage."
+                        + (" You are dying." if nearest.health < 20 else ""),
+                    )
+                    return
+                if d <= WOLF_DAY_AGGRO_RADIUS:
+                    self._move_toward(nearest.x, nearest.y, world)
+                    self.action = "STALKING"
+                    return
             if random.random() < 0.75:
                 self.action = "RESTING"
                 return

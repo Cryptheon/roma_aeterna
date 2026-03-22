@@ -46,6 +46,7 @@ class SimulationEngine:
         self.save_path: Optional[str] = save_path
         self.pending_prayers: list = []  # [{agent_uid, agent_name, temple, prayer, tick}]
         self.notifications: list = []   # [{text, category}] — drained by renderer each frame
+        self.llm_call_ticks: list = []  # tick of each LLM call; capped at 2000 for graphing
 
         # Track previous time of day for dawn/dusk events
         self._prev_time_of_day: str = ""
