@@ -566,6 +566,9 @@ class Renderer:
             elif "Gladiator" in agent.role:
                 body_color = COLORS["brick_dark"]
                 head_detail = COLORS["legionary_gold"]
+            elif "Vandal" in agent.role:
+                body_color = (80, 55, 35)      # dark fur/leather
+                head_detail = (200, 140, 60)   # amber/bronze accent
             
             # Draw agent (simple pawn shape)
             agent_size = max(3, size // 2)
