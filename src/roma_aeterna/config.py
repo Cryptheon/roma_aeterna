@@ -19,6 +19,9 @@ SCREEN_WIDTH: int = 1920
 SCREEN_HEIGHT: int = 1080
 FPS: int = 60
 
+# --- Audio ---
+MUSIC_VOLUME: float = 0.5          # Ambient music volume (0.0 = silent, 1.0 = full)
+
 # --- Map ---
 GRID_WIDTH: int = 200
 GRID_HEIGHT: int = 150

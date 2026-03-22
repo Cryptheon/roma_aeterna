@@ -15,6 +15,7 @@ Draws the game world with:
 import pygame
 import math
 import random
+from pathlib import Path
 from ..config import *
 from .camera import Camera
 from .assets import COLORS, SpriteSheet, ParticleSystem
@@ -94,6 +95,42 @@ class Renderer:
         # --- Notification toasts ---
         self._notifications: list = []  # [{text, color, age, lifetime}]
 
+        # --- Ambient music ---
+        self._music_tracks: list = []
+        self._music_idx: int = 0
+        self._init_music()
+
+    # ================================================================
+    # MUSIC
+    # ================================================================
+
+    def _init_music(self) -> None:
+        """Discover OGG tracks, shuffle them, and start playback."""
+        music_dir = Path(__file__).parent.parent.parent.parent / "assets" / "audio" / "music"
+        tracks = sorted(music_dir.glob("*.ogg"))
+        if not tracks:
+            return
+        random.shuffle(tracks)
+        self._music_tracks = tracks
+        try:
+            pygame.mixer.music.set_volume(MUSIC_VOLUME)
+            pygame.mixer.music.set_endevent(pygame.USEREVENT)
+            pygame.mixer.music.load(str(self._music_tracks[0]))
+            pygame.mixer.music.play()
+        except Exception as e:
+            print(f"[AUDIO] Music init failed: {e}")
+
+    def _next_track(self) -> None:
+        """Advance to the next track in the shuffled playlist, wrapping around."""
+        if not self._music_tracks:
+            return
+        self._music_idx = (self._music_idx + 1) % len(self._music_tracks)
+        try:
+            pygame.mixer.music.load(str(self._music_tracks[self._music_idx]))
+            pygame.mixer.music.play()
+        except Exception as e:
+            print(f"[AUDIO] Track advance failed: {e}")
+
     def run(self):
         running = True
         while running:
@@ -123,6 +160,11 @@ class Renderer:
 
             mx, my = pygame.mouse.get_pos()
             for event in pygame.event.get():
+                # --- Music track ended — advance playlist regardless of UI state ---
+                if event.type == pygame.USEREVENT:
+                    self._next_track()
+                    continue
+
                 # --- Oracle modal intercepts all input while active ---
                 if self._active_prayer is not None:
                     if event.type == pygame.KEYDOWN:
