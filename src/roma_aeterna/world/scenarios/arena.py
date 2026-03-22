@@ -314,15 +314,13 @@ class GladiatorArenaScenario(BaseScenario):
     def _create_arena_guards():
         from roma_aeterna.agent.base import Agent
         guard_data = [
-            # North tunnel entrance
-            ("Gaius Carbo",    _CX - 4,           _CY - _OUTER_RY - 2),
-            ("Lucius Capito",  _CX + 4,           _CY - _OUTER_RY - 2),
-            # South tunnel entrance
-            ("Marcus Fuscus",  _CX - 4,           _CY + _OUTER_RY + 2),
-            ("Publius Scaeva", _CX + 4,           _CY + _OUTER_RY + 2),
-            # East and west flanks of the arena wall
-            ("Titus Labienus", _CX - _WALL_RX - 3, _CY),
-            ("Quintus Balbus", _CX + _WALL_RX + 3, _CY),
+            # Guards deployed inside the sand floor to engage animals
+            ("Gaius Carbo",    _CX - 8,  _CY - 8),   # north-west sand
+            ("Lucius Capito",  _CX + 8,  _CY - 8),   # north-east sand
+            ("Marcus Fuscus",  _CX - 8,  _CY + 8),   # south-west sand
+            ("Publius Scaeva", _CX + 8,  _CY + 8),   # south-east sand
+            ("Titus Labienus", _CX - 14, _CY),        # west sand edge
+            ("Quintus Balbus", _CX + 14, _CY),        # east sand edge
         ]
         return [Agent(name, "Guard (Legionary)", x, y) for name, x, y in guard_data]
 

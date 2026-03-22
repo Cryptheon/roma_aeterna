@@ -1660,25 +1660,25 @@ class ParticleSystem:
         ))
 
     def emit_combat_sparks(self, x, y):
-        """Burst of bright sparks at (x, y) when a hit lands."""
+        """Burst of silver sparks at (x, y) when a hit lands."""
         spark_colors = [
-            (255, 255, 200),   # white-yellow
-            (255, 220,  60),   # gold
-            (255, 160,  30),   # orange
-            (255, 255, 255),   # white
+            (200, 200, 210),   # silver-blue
+            (180, 185, 195),   # cool silver
+            (220, 220, 230),   # pale silver
+            (255, 255, 255),   # white flash
         ]
-        for _ in range(8):
+        for _ in range(6):
             angle_x = random.uniform(-1, 1)
             angle_y = random.uniform(-1, 1)
-            speed   = random.uniform(2.5, 5.5)
+            speed   = random.uniform(1.2, 3.0)
             self.particles.append(Particle(
-                x + random.uniform(-0.2, 0.2),
-                y + random.uniform(-0.2, 0.2),
+                x + random.uniform(-0.15, 0.15),
+                y + random.uniform(-0.15, 0.15),
                 angle_x * speed,
-                angle_y * speed - 1.0,   # slight upward bias
-                random.uniform(0.18, 0.38),
+                angle_y * speed - 0.6,   # slight upward bias
+                random.uniform(0.12, 0.28),
                 random.choice(spark_colors),
-                size=random.randint(1, 2),
+                size=1,
             ))
     
     def update(self, dt):

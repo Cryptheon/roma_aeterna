@@ -599,6 +599,26 @@ class Renderer:
                     pygame.draw.circle(self.screen, (*body_color, 150),
                                        (cx - 4 + d * 4, cy + body_h + 3), 1)
             
+            # Health bar — shown when damaged, at zoom >= 1.5 or recently hit
+            recently_hit = (self.engine.tick_count - getattr(agent, "last_hit_tick", -999)) <= 60
+            if agent.health < agent.max_health and (self.camera.zoom >= 1.5 or recently_hit):
+                bar_w = max(4, size * 2 // 3)
+                bar_h = max(1, size // 8) + 1
+                bar_x = cx - bar_w // 2
+                bar_y = cy - size // 2 - bar_h - 3
+                pygame.draw.rect(self.screen, (60, 15, 15),
+                                 (bar_x, bar_y, bar_w, bar_h))
+                filled = int(bar_w * agent.health / agent.max_health)
+                if filled > 0:
+                    hp_ratio = agent.health / agent.max_health
+                    bar_color = (
+                        int(220 * (1 - hp_ratio)),
+                        int(180 * hp_ratio),
+                        30,
+                    )
+                    pygame.draw.rect(self.screen, bar_color,
+                                     (bar_x, bar_y, filled, bar_h))
+
             if agent.action == "MOVING" and random.random() < 0.1:
                 self.particles.emit_dust(agent.x, agent.y + 0.5)
 
@@ -666,17 +686,24 @@ class Renderer:
                 pygame.draw.circle(self.screen, (240, 220, 60),
                                    (cx + r, cy), max(1, size // 8))
 
-        # Health bar at zoom >= 2 if damaged
-        if self.camera.zoom >= 2.0 and agent.health < agent.max_health:
+        # Health bar — always shown when damaged
+        recently_hit = (self.engine.tick_count - getattr(agent, "last_hit_tick", -999)) <= 60
+        if agent.health < agent.max_health and (self.camera.zoom >= 1.5 or recently_hit):
             bar_w = max(4, size * 2 // 3)
-            bar_h = max(1, size // 8)
+            bar_h = max(1, size // 8) + 1
             bar_x = cx - bar_w // 2
-            bar_y = cy - size // 2 - bar_h - 1
-            pygame.draw.rect(self.screen, (80, 20, 20),
+            bar_y = cy - size // 2 - bar_h - 2
+            pygame.draw.rect(self.screen, (60, 15, 15),
                              (bar_x, bar_y, bar_w, bar_h))
             filled = int(bar_w * agent.health / agent.max_health)
             if filled > 0:
-                pygame.draw.rect(self.screen, (180, 60, 60),
+                hp_ratio = agent.health / agent.max_health
+                bar_color = (
+                    int(220 * (1 - hp_ratio)),
+                    int(180 * hp_ratio),
+                    30,
+                )
+                pygame.draw.rect(self.screen, bar_color,
                                  (bar_x, bar_y, filled, bar_h))
 
         # Name label at zoom >= 3
