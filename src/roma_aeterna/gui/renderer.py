@@ -757,7 +757,7 @@ class Renderer:
     
     def _update_particles(self, dt):
         self.particles.update(dt)
-        
+
         for obj in self.engine.world.objects:
             flam = obj.get_component(Flammable)
             if flam and flam.is_burning and random.random() < 0.3:
@@ -768,6 +768,11 @@ class Renderer:
                 )
                 if random.random() < 0.2:
                     self.particles.emit_smoke(obj.x + 0.5, obj.y)
+
+        tick = self.engine.tick_count
+        for agent in self.engine.agents:
+            if tick - getattr(agent, "last_hit_tick", -999) <= 4:
+                self.particles.emit_combat_sparks(agent.x, agent.y)
 
     # ================================================================
     # HOVER / TOOLTIP

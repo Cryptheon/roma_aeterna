@@ -87,6 +87,8 @@ class Animal:
         self.home_y: Optional[float] = None
         self.home_radius: Optional[float] = None
 
+        self.last_hit_tick: int = -999
+
     # ================================================================
     # ENGINE INTERFACE
     # ================================================================
@@ -94,6 +96,7 @@ class Animal:
     def take_damage(self, amount: float) -> None:
         """Apply direct damage; die if HP reaches zero."""
         self.health = max(0.0, self.health - amount)
+        self.last_hit_tick = self.sim_tick
         if self.health <= 0.0 and self.is_alive:
             self.is_alive = False
             self.action = "DEAD"

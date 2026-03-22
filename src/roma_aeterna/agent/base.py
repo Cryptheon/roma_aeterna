@@ -61,6 +61,7 @@ class Agent:
         self.max_health: float = 100.0
         self.is_alive: bool = True
         self.death_tick: int = -1
+        self.last_hit_tick: int = -999
 
         # --- Personality (must be set before brain, which uses self.role) ---
         self.personality_seed: Dict[str, Any] = personality_seed or {}
@@ -173,6 +174,7 @@ class Agent:
     def take_damage(self, amount: float) -> None:
         """Apply direct damage and trigger death if HP hits zero."""
         self.health = max(0.0, self.health - amount)
+        self.last_hit_tick = self.sim_tick
         if self.health <= 0 and self.is_alive:
             self.is_alive = False
             self.action = "DEAD"
