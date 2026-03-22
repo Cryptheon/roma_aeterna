@@ -493,16 +493,43 @@ class ActionExecutor:
         target_name = decision.get("target", "")
         item_name = decision.get("item", "")
 
+        t_lower = target_name.lower().strip()
+
+        # Pass 1: exact name match within attack range
         target_agent = None
         for other in self.engine.agents:
-            if (other.name.lower() == target_name.lower()
-                    and other.is_alive and other.uid != agent.uid):
+            if not other.is_alive or other.uid == agent.uid:
+                continue
+            if other.name.lower() == t_lower:
                 dist = math.sqrt(
                     (other.x - agent.x) ** 2 + (other.y - agent.y) ** 2
                 )
                 if dist <= ATTACK_PROXIMITY_RADIUS:
                     target_agent = other
                     break
+
+        # Pass 2: fuzzy match — LLM may write "a wolf" / "wolf" / "legionary" etc.
+        # Find nearest alive agent in range whose name or species contains any
+        # meaningful word from the target string.
+        if not target_agent:
+            words = [w for w in t_lower.split() if len(w) > 2]
+            candidates = []
+            for other in self.engine.agents:
+                if not other.is_alive or other.uid == agent.uid:
+                    continue
+                dist = math.sqrt(
+                    (other.x - agent.x) ** 2 + (other.y - agent.y) ** 2
+                )
+                if dist > ATTACK_PROXIMITY_RADIUS:
+                    continue
+                name_l  = other.name.lower()
+                # also check animal_type ("wolf") or role ("legionary") as a hint
+                kind_l  = getattr(other, "animal_type",
+                                  getattr(other, "role", "")).lower()
+                if any(w in name_l or w in kind_l for w in words):
+                    candidates.append((dist, other))
+            if candidates:
+                target_agent = min(candidates, key=lambda x: x[0])[1]
 
         if not target_agent:
             agent.memory.add_event(
@@ -688,6 +715,7 @@ class ActionExecutor:
             return
 
         agent.last_speech = speech
+        agent.last_speech_tick = tick
         agent.memory.add_event(
             f"You shouted to all nearby: \"{speech}\"",
             tick=tick, importance=2.0, memory_type="event",

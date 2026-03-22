@@ -84,6 +84,7 @@ class Agent:
         self.current_thought: str = "I have just woken up."
         self.waiting_for_llm: bool = False
         self.last_speech: str = ""
+        self.last_speech_tick: int = -999
         self.movement_cooldown: int = 0
         self.interaction_cooldown: int = 0
 
@@ -335,6 +336,7 @@ class Agent:
 
         # Record in speaker's memory
         self.last_speech = message
+        self.last_speech_tick = tick
         self.memory.add_event(
             f"You said to {target.name}: \"{message}\"",
             tick=tick, importance=2.0, memory_type="conversation",

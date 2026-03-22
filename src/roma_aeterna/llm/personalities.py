@@ -93,6 +93,15 @@ PERSONALITY_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "quirks": ["scans exits constantly", "stands at attention near authority"],
         "motivation": "The legion is your family. Discipline wins battles. Sentiment loses them.",
     },
+    "barbarian_raider": {
+        "traits": ["aggressive", "greedy", "impulsive", "tribal", "brutal"],
+        "speech_style": "crude and boastful, uses broken Latin mixed with Germanic taunts, short sentences",
+        "goals": ["loot gold and valuables", "attack and drive off Romans", "claim trophies"],
+        "fears": ["organized resistance", "being encircled", "dying without glory"],
+        "values": ["plunder", "strength", "tribal honor", "fear of the gods"],
+        "quirks": ["appraises everything for its resale value", "challenges others to single combat"],
+        "motivation": "Rome grew fat on the wealth of the world. What their legions stole, you will reclaim — with interest.",
+    },
 }
 
 ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
@@ -105,9 +114,11 @@ ROLE_PERSONALITY_MAP: Dict[str, List[str]] = {
     "Craftsman": ["curious_artisan", "shrewd_merchant"],
     "Patrician": ["patrician_socialite", "ambitious_politician"],
     "Priest": ["devout_priest", "stoic_philosopher"],
+    "Vandal": ["barbarian_raider", "street_survivor"],
 }
 
 ROLE_STARTING_INVENTORY: Dict[str, List[str]] = {
+    "Vandal": ["Gladius", "Pilum", "Bread", "Gold Coin"],
     "Senator": ["Toga", "Stylus", "Wine", "Gold Coin", "Gold Coin"],
     "Gladiator": ["Gladius", "Bread", "Posca", "Sandals"],
     "Merchant": ["Bread", "Amphora", "Salt", "Wheat", "Silver Ring"],

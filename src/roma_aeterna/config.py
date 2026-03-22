@@ -6,8 +6,8 @@ import os
 
 # --- Scenario ---
 # Which simulation environment to load.
-# Available: "rome" | "gladiator_arena"
-SCENARIO: str = "gladiator_arena"
+# Available: "rome" | "gladiator_arena" | "curia_pompei" | "sack_of_rome" | "gladiator_fight"
+SCENARIO: str = "gladiator_fight"
 
 # --- Population ---
 N_AGENTS: int = 1                  # Total number of citizens to spawn
@@ -61,8 +61,8 @@ VLLM_URL: str = LLM_BASE_URL
 VLLM_MODEL: str = LLM_MODEL
 
 # --- Agent Perception ---
-PERCEPTION_RADIUS: int = 8          # Tiles an agent can "see"
-INTERACTION_RADIUS: float = 2.0     # Tiles within which agents can interact
+PERCEPTION_RADIUS: int = 12          # Tiles an agent can "see"
+INTERACTION_RADIUS: float = 3.0     # Tiles within which agents can interact
 MAX_INVENTORY_SIZE: int = 12
 MEMORY_SHORT_TERM_CAP: int = 20
 MEMORY_LONG_TERM_CAP: int = 50
@@ -129,7 +129,7 @@ BOAR_DAMAGE: float = 4.0
 
 # --- Combat ---
 UNARMED_DAMAGE: float = 15.0             # Base damage when attacking bare-handed
-ATTACK_PROXIMITY_RADIUS: float = 2.0   # Tiles within which ATTACK can reach a target
+ATTACK_PROXIMITY_RADIUS: float = 3.5   # Tiles within which ATTACK can reach a target
 DEAD_REMOVAL_DELAY: int = 1800          # Ticks before corpse is purged (~30s at TPS=30)
 
 # --- Proximity / Interaction Ranges ---
@@ -173,7 +173,7 @@ AUTOSAVE_INTERVAL: int = 6000       # Ticks between autosaves (~3.3 min at TPS=3
 LLM_BATCH_SIZE: int = 64            # Max agents processed per LLM batch
 
 # --- LIF Urgency ---
-LIF_BASELINE_URGENCY: float = 0.6   # Constant floor; drives dominate above this
+LIF_BASELINE_URGENCY: float = 1.8   # Constant floor; drives dominate above this
 LIF_ENV_FIRE_WEIGHT: float = 0.5    # Scales fire proximity urgency (intensity / dist * weight)
 LIF_ENV_NIGHT_URGENCY: float = 1.0  # Flat urgency added when outdoors at night
 LIF_ENV_UPDATE_INTERVAL: int = 20   # Ticks between environmental urgency scans (~0.67s at TPS=30)

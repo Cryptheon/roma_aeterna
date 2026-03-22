@@ -327,12 +327,14 @@ class GladiatorArenaScenario(BaseScenario):
     def create_animals(self, world) -> list:
         from roma_aeterna.agent.animal import Animal
         animals = []
-        # Four wolves — south pair near Gate of Death, north pair flanking the sand
+        # Eight wolves spread across the sand floor
         wolf_positions = [
             (_CX - 6,  _CY + 10),   # south-west
             (_CX + 6,  _CY + 10),   # south-east
-            (_CX - 12, _CY - 2),    # west side of sand
-            (_CX + 12, _CY - 2),    # east side of sand
+            (_CX - 12, _CY - 2),    # west mid
+            (_CX + 12, _CY - 2),    # east mid
+            (_CX - 4,  _CY - 10),   # north-west
+            (_CX + 4,  _CY - 10),   # north-east
         ]
         for i, (x, y) in enumerate(wolf_positions):
             wolf = Animal("wolf", x, y, f"Arena Wolf {i + 1}")

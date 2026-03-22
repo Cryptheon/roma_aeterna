@@ -5,6 +5,7 @@ Select the active scenario in config.py:
 
     SCENARIO = "rome"             # Full historical Rome c. 161 AD
     SCENARIO = "gladiator_arena"  # Flavian Amphitheatre arena c. 80 AD
+    SCENARIO = "curia_pompei"     # Curia of Pompey, 44 BC — senators only
 
 To add a new scenario, subclass BaseScenario, implement the three
 required methods, and register the class in SCENARIO_REGISTRY below.
@@ -13,10 +14,16 @@ required methods, and register the class in SCENARIO_REGISTRY below.
 from .base import BaseScenario
 from .rome import RomeScenario
 from .arena import GladiatorArenaScenario
+from .curia import CuriaPompeiScenario
+from .sack import SackOfRomeScenario
+from .gladiator_fight import GladiatorFightScenario
 
 SCENARIO_REGISTRY: dict = {
     "rome": RomeScenario,
     "gladiator_arena": GladiatorArenaScenario,
+    "curia_pompei": CuriaPompeiScenario,
+    "sack_of_rome": SackOfRomeScenario,
+    "gladiator_fight": GladiatorFightScenario,
 }
 
 
