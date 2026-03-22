@@ -622,6 +622,9 @@ class Renderer:
             if agent.action == "MOVING" and random.random() < 0.1:
                 self.particles.emit_dust(agent.x, agent.y + 0.5)
 
+            # Speech bubble
+            self._draw_speech_bubble(agent, cx, cy - size // 2 - 4)
+
     # Per-species palette: (body, outline, accent)
     _ANIMAL_COLORS = {
         "wolf":  ((35, 190, 175),  (15,  90,  85), (255, 80, 80)),   # teal; red when attacking
@@ -711,6 +714,9 @@ class Renderer:
             label = self.font_label.render(agent.name, True, (185, 165, 120))
             self.screen.blit(label, (cx - label.get_width() // 2, cy - size // 2 - 14))
 
+        # Speech bubble
+        self._draw_speech_bubble(agent, cx, cy - size // 2 - 4)
+
     # ================================================================
     # LIGHTING / DAY-NIGHT
     # ================================================================
@@ -782,6 +788,50 @@ class Renderer:
     # PARTICLES
     # ================================================================
     
+    _BUBBLE_DURATION = 210   # ticks (~7s at 30 TPS) the bubble stays visible
+
+    def _draw_speech_bubble(self, agent, cx: int, top_y: int) -> None:
+        """Draw a speech snippet above the agent's head when recently spoken."""
+        age = self.engine.tick_count - getattr(agent, "last_speech_tick", -9999)
+        if age > self._BUBBLE_DURATION or not getattr(agent, "last_speech", ""):
+            return
+
+        text = agent.last_speech
+        # Trim to ~48 chars; split at last space before limit for cleanliness
+        MAX = 48
+        if len(text) > MAX:
+            cut = text.rfind(" ", 0, MAX)
+            text = text[: cut if cut > 0 else MAX] + "…"
+
+        # Fade-out in the last 60 ticks
+        alpha = 255
+        if age > self._BUBBLE_DURATION - 60:
+            alpha = int(255 * (self._BUBBLE_DURATION - age) / 60)
+        alpha = max(0, min(255, alpha))
+
+        lbl = self.font_label.render(text, True, (240, 240, 220))
+        pad = 4
+        bw = lbl.get_width()  + pad * 2
+        bh = lbl.get_height() + pad * 2
+        bx = cx - bw // 2
+        by = top_y - bh - 6   # sit above the head
+
+        # Semi-transparent background
+        bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        bg.fill((20, 15, 10, max(0, int(alpha * 0.82))))
+        pygame.draw.rect(bg, (180, 160, 100, alpha), (0, 0, bw, bh), 1)
+        self.screen.blit(bg, (bx, by))
+
+        # Text (blit directly — apply alpha via colorkey approach)
+        lbl.set_alpha(alpha)
+        self.screen.blit(lbl, (bx + pad, by + pad))
+
+        # Small tail triangle pointing down toward the speaker
+        tip_x = cx
+        tip_y = by + bh + 5
+        pygame.draw.polygon(self.screen, (20, 15, 10),
+                            [(tip_x - 4, by + bh), (tip_x + 4, by + bh), (tip_x, tip_y)])
+
     def _update_particles(self, dt):
         self.particles.update(dt)
 

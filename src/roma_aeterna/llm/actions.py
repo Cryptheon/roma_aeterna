@@ -688,6 +688,7 @@ class ActionExecutor:
             return
 
         agent.last_speech = speech
+        agent.last_speech_tick = tick
         agent.memory.add_event(
             f"You shouted to all nearby: \"{speech}\"",
             tick=tick, importance=2.0, memory_type="event",
