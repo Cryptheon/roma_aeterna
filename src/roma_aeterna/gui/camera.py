@@ -186,6 +186,7 @@ class Camera:
     # --- Dragging ---
 
     def _start_drag(self, mouse_pos):
+        self._follow_target = None   # user takes back control immediately
         self.dragging = True
         self._drag_start_mouse = mouse_pos
         self._drag_start_scroll = (self.scroll_x, self.scroll_y)
@@ -326,6 +327,14 @@ class Camera:
         lerp = 1 - math.exp(-self.follow_lerp * dt)
         self.scroll_x += (target_sx - self.scroll_x) * lerp
         self.scroll_y += (target_sy - self.scroll_y) * lerp
+
+        # Clear a one-shot pan (static tuple) once the camera arrives,
+        # so keyboard/edge-scroll work normally afterwards.
+        if isinstance(t, tuple):
+            if abs(self.scroll_x - target_sx) < 1.5 and abs(self.scroll_y - target_sy) < 1.5:
+                self.scroll_x = target_sx
+                self.scroll_y = target_sy
+                self._follow_target = None
 
     # --- Screen shake ---
 

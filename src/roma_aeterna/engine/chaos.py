@@ -27,6 +27,7 @@ class ChaosEngine:
     def __init__(self, world: Any) -> None:
         self.world = world
         self._smoked_tiles: set = set()  # Tracks tiles with smoke for efficient decay
+        self._agent_tick: int = 0        # Internal counter for rate-limited checks
 
     # ================================================================
     # LEGACY ENTRY POINT (calls both phases)
@@ -60,6 +61,7 @@ class ChaosEngine:
 
     def tick_agents(self, agents: List[Any], weather: Any) -> None:
         """Apply environmental status effects to agents based on conditions."""
+        self._agent_tick += 1
         weather_effects = weather.get_effects()
 
         from roma_aeterna.agent.status_effects import create_effect
@@ -85,7 +87,10 @@ class ChaosEngine:
                         agent.status_effects.add(wet)
 
             # --- Heatwave → Heatstroke risk (scales with thirst) ---
-            if weather_effects.get("heatwave"):
+            # Gated to every 60 ticks (~2s at TPS=30) so the per-tick base
+            # probability isn't multiplied by 30. Without the gate, even a
+            # fully-hydrated agent had a ~15%/s chance — near-certain within seconds.
+            if weather_effects.get("heatwave") and self._agent_tick % 60 == 0:
                 thirst_ratio = agent.drives["thirst"] / 100.0
                 heatstroke_chance = 0.005 + (thirst_ratio ** 2) * 0.03
                 if random.random() < heatstroke_chance:

@@ -46,7 +46,7 @@ COLORS = {
     "circus_spina":     (180, 165, 135),
     
     # Structure
-    "wall":             (188, 175, 155),
+    "wall":             (105,  90,  72),
     "building_floor":   (178, 165, 142),
     
     # --- Building Materials ---
@@ -1658,6 +1658,28 @@ class ParticleSystem:
             COLORS["dirt_dark"],
             size=1
         ))
+
+    def emit_combat_sparks(self, x, y):
+        """Burst of silver sparks at (x, y) when a hit lands."""
+        spark_colors = [
+            (200, 200, 210),   # silver-blue
+            (180, 185, 195),   # cool silver
+            (220, 220, 230),   # pale silver
+            (255, 255, 255),   # white flash
+        ]
+        for _ in range(6):
+            angle_x = random.uniform(-1, 1)
+            angle_y = random.uniform(-1, 1)
+            speed   = random.uniform(1.2, 3.0)
+            self.particles.append(Particle(
+                x + random.uniform(-0.15, 0.15),
+                y + random.uniform(-0.15, 0.15),
+                angle_x * speed,
+                angle_y * speed - 0.6,   # slight upward bias
+                random.uniform(0.12, 0.28),
+                random.choice(spark_colors),
+                size=1,
+            ))
     
     def update(self, dt):
         self.particles = [p for p in self.particles if p.update(dt)]

@@ -28,7 +28,7 @@ class DecisionRecorder:
         """Record a decision for history tracking."""
         agent = self._agent
         entry = {
-            "tick": int(agent.current_time),
+            "tick": agent.sim_tick,
             "source": source,
             "thought": decision.get("thought", "..."),
             "action": decision.get("action", "IDLE"),
@@ -50,7 +50,7 @@ class DecisionRecorder:
         """Store the raw LLM response for debugging."""
         agent = self._agent
         entry = {
-            "tick": int(agent.current_time),
+            "tick": agent.sim_tick,
             "raw": raw_text[:500],  # Truncate to avoid memory bloat
             "parsed": str(parsed)[:200] if parsed else None,
             "error": error,

@@ -112,7 +112,10 @@ class WorldGenerator:
         # === Phase 14: Vegetation & Decorations ===
         WorldGenerator._scatter_vegetation(world)
         WorldGenerator._place_decorations(world)
-        
+
+        # Camera focus: Forum Romanum area
+        world.camera_start = (90, 55)
+
         return world
 
     # ----------------------------------------------------------------

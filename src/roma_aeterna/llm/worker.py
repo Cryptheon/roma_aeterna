@@ -4,16 +4,20 @@ LLM Worker — Async inference thread that processes agent decisions.
 Orchestration only: queue management, async batching, prompt building,
 and result routing. All action execution lives in actions.py; JSON
 parsing in parser.py; mock decisions in mock.py.
+
+Supports two provider backends (set LLM_PROVIDER in config / env):
+  "openai"  — AsyncOpenAI client pointing at any OpenAI-compatible endpoint
+               (local vLLM, OpenAI, Mistral, etc.)
+  "gemini"  — Google's native google-genai SDK; reads GEMINI_API_KEY automatically.
 """
 
 import threading
 import asyncio
 from typing import Any, Dict, Optional, List
 
-from openai import AsyncOpenAI
-
 from roma_aeterna.config import (
-    VLLM_URL, VLLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_BATCH_SIZE,
+    LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY,
+    LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_BATCH_SIZE,
 )
 from .prompts import build_prompt
 from .parser import parse_json
@@ -43,9 +47,19 @@ class LLMWorker(threading.Thread):
     def run(self) -> None:
         asyncio.run(self._async_loop())
 
+    def _build_client(self) -> Any:
+        """Create the inference client for the configured provider."""
+        if LLM_PROVIDER == "gemini":
+            from google import genai
+            return genai.Client()  # picks up GEMINI_API_KEY automatically
+        else:
+            from openai import AsyncOpenAI
+            return AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+
     async def _async_loop(self) -> None:
         print("[LLM] Worker started")
-        client = AsyncOpenAI(base_url=VLLM_URL, api_key="vllm")
+        client = self._build_client()
+        print(f"[LLM] Provider: {LLM_PROVIDER}  Model: {LLM_MODEL}")
 
         while True:
             batch: List[Any] = []
@@ -97,14 +111,18 @@ class LLMWorker(threading.Thread):
         )
         agent.record_prompt(prompt)
         try:
-            response = await client.chat.completions.create(
-                model=VLLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=LLM_TEMPERATURE,
-                max_tokens=LLM_MAX_TOKENS,
-            )
-            content = response.choices[0].message.content
+            if LLM_PROVIDER == "gemini":
+                content = await self._call_gemini(client, prompt)
+            else:
+                content = await self._call_openai(client, prompt)
+
             parsed = parse_json(content)
+
+            # Record tick for the timeline graph (thread-safe append, capped)
+            ticks = self.engine.llm_call_ticks
+            ticks.append(agent.sim_tick)
+            if len(ticks) > 2000:
+                del ticks[:500]
 
             if parsed:
                 agent.record_llm_response(content, parsed)
@@ -118,6 +136,29 @@ class LLMWorker(threading.Thread):
             print(f"[LLM] Inference error: {e}")
 
         return await self._mock_maker.decide(agent)
+
+    async def _call_openai(self, client: Any, prompt: str) -> str:
+        """Call any OpenAI-compatible endpoint (vLLM, OpenAI, Mistral, etc.)."""
+        response = await client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
+        )
+        return response.choices[0].message.content
+
+    async def _call_gemini(self, client: Any, prompt: str) -> str:
+        """Call Google Gemini via the native google-genai SDK."""
+        from google.genai import types
+        response = await client.aio.models.generate_content(
+            model=LLM_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=LLM_TEMPERATURE,
+                max_output_tokens=LLM_MAX_TOKENS,
+            ),
+        )
+        return response.text
 
     # ================================================================
     # APPLY DECISION — delegate to ActionExecutor

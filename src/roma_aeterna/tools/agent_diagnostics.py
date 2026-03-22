@@ -52,7 +52,7 @@ class AgentDiagnostics:
         lines = []
         lines.append("=" * 72)
         lines.append(f"  AGENT DIAGNOSTIC: {agent.name}")
-        lines.append(f"  Role: {agent.role}  |  Alive: {agent.is_alive}  |  Tick: {int(agent.current_time)}")
+        lines.append(f"  Role: {agent.role}  |  Alive: {agent.is_alive}  |  Tick: {agent.sim_tick}")
         lines.append("=" * 72)
 
         # --- Health & Drives ---

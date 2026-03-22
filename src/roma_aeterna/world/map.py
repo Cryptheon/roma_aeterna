@@ -57,6 +57,9 @@ class GameMap:
         self.objects = []
         self.landmarks = {}
         self.zones = {}
+        # Tile coordinates the camera should focus on when the map is first loaded.
+        # Scenarios set this after generation; defaults to map center.
+        self.camera_start: tuple = (width // 2, height // 2)
 
     def get_tile(self, x, y) -> Optional[Tile]:
         if 0 <= x < self.width and 0 <= y < self.height:

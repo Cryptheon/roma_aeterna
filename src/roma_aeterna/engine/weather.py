@@ -128,7 +128,7 @@ class WeatherSystem:
             ["north", "south", "east", "west",
              "northeast", "northwest", "southeast", "southwest"]
         )
-        self.duration = random.randint(50, 250)
+        self.duration = random.randint(3000, 12000)
 
     def get_effects(self) -> Dict[str, float]:
         """Return active environmental effect multipliers."""

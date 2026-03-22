@@ -3,197 +3,30 @@ Rome: Aeterna — Entry Point
 
 Starts the simulation engine, loads any existing save, and runs the
 renderer loop. On exit (ESC or window close), saves the game state.
+
+The active scenario is selected via SCENARIO in config.py.
 """
 
 import sys
-import random
 import threading
+from collections import Counter
+
 from roma_aeterna.tools.agent_diagnostics import AgentDiagnostics
 from roma_aeterna.tools.agent_logger import AgentLogger
 
-from roma_aeterna.world.generator import WorldGenerator
-from roma_aeterna.agent.base import Agent
+from roma_aeterna.world.scenarios import get_scenario
 from roma_aeterna.engine.loop import SimulationEngine
 from roma_aeterna.gui.renderer import Renderer
 from roma_aeterna.core.persistence import has_save, delete_save
-from roma_aeterna.config import N_AGENTS, GRID_WIDTH, GRID_HEIGHT
-
-
-# ============================================================
-# Roman Name Generator
-# ============================================================
-
-MALE_PRAENOMINA = [
-    "Gaius", "Lucius", "Marcus", "Publius", "Quintus", "Titus",
-    "Aulus", "Decimus", "Gnaeus", "Spurius", "Manius", "Servius",
-    "Appius", "Numerius", "Vibius", "Sextus", "Kaeso", "Postumus",
-]
-
-FEMALE_PRAENOMINA = [
-    "Julia", "Claudia", "Cornelia", "Livia", "Valeria", "Aurelia",
-    "Flavia", "Caecilia", "Aemilia", "Sulpicia", "Pompeia", "Tullia",
-    "Antonia", "Domitia", "Fabia", "Lucretia", "Sempronia", "Terentia",
-]
-
-NOMINA = [
-    "Cornelius", "Julius", "Claudius", "Valerius", "Fabius",
-    "Aemilius", "Sempronius", "Licinius", "Cassius", "Sulpicius",
-    "Servilius", "Tullius", "Octavius", "Horatius", "Petronius",
-    "Flavius", "Domitius", "Antonius", "Calpurnius", "Marcius",
-    "Pompeius", "Junius", "Manlius", "Postumius", "Volumnius",
-    "Aquilius", "Atilius", "Rutilius", "Papirius", "Furius",
-]
-
-COGNOMINA = [
-    "Rufus", "Niger", "Crassus", "Longus", "Maximus", "Magnus",
-    "Brutus", "Scaevola", "Pulcher", "Naso", "Cursor", "Corvus",
-    "Laenas", "Balbus", "Priscus", "Severus", "Calvus", "Gallus",
-    "Flaccus", "Lepidus", "Piso", "Scipio", "Cato", "Gracchus",
-    "Sulla", "Nerva", "Firmus", "Macer", "Paullus", "Regulus",
-]
-
-ROLE_WEIGHTS = {
-    "Plebeian":         30,
-    "Merchant":         15,
-    "Craftsman":        12,
-    "Guard (Legionary)": 10,
-    "Gladiator":         5,
-    "Senator":           4,
-    "Patrician":         4,
-    "Priest":            3,
-}
-
-ROLE_SPAWN_ZONES = {
-    "Senator":          ["forum_floor", "via_sacra"],
-    "Patrician":        ["palatine", "garden"],
-    "Priest":           ["forum_floor"],
-    "Gladiator":        ["sand_arena", "circus_sand"],
-    "Guard (Legionary)":["via_sacra", "road_paved", "road_cobble"],
-    "Merchant":         ["forum_floor", "road_paved", "via_sacra"],
-    "Craftsman":        ["road_cobble", "dirt", "building_floor"],
-    "Plebeian":         ["dirt", "road_cobble", "grass", "road_paved"],
-}
-
-
-def _generate_roman_name(is_female: bool, used_names: set) -> str:
-    for _ in range(50):
-        if is_female:
-            name = f"{random.choice(FEMALE_PRAENOMINA)} {random.choice(COGNOMINA)}"
-        else:
-            praenomen = random.choice(MALE_PRAENOMINA)
-            nomen = random.choice(NOMINA)
-            if random.random() < 0.5:
-                name = f"{praenomen} {nomen} {random.choice(COGNOMINA)}"
-            else:
-                name = f"{praenomen} {nomen}"
-        if name not in used_names:
-            used_names.add(name)
-            return name
-    name = f"{random.choice(MALE_PRAENOMINA)} {random.randint(1, 999)}"
-    used_names.add(name)
-    return name
-
-
-def _find_spawn_point(world, role: str, used_positions: set) -> tuple:
-    preferred = ROLE_SPAWN_ZONES.get(role, ["dirt", "road_cobble"])
-
-    for _ in range(100):
-        x = random.randint(5, GRID_WIDTH - 5)
-        y = random.randint(5, GRID_HEIGHT - 5)
-        if (x, y) in used_positions:
-            continue
-        tile = world.get_tile(x, y)
-        if tile and tile.is_walkable and tile.terrain_type in preferred:
-            used_positions.add((x, y))
-            return (x, y)
-
-    for _ in range(200):
-        x = random.randint(5, GRID_WIDTH - 5)
-        y = random.randint(5, GRID_HEIGHT - 5)
-        if (x, y) in used_positions:
-            continue
-        tile = world.get_tile(x, y)
-        if tile and tile.is_walkable and tile.building is None:
-            used_positions.add((x, y))
-            return (x, y)
-
-    return (random.randint(20, GRID_WIDTH - 20), random.randint(20, GRID_HEIGHT - 20))
-
-
-def create_agents(world=None):
-    """Spawn hand-placed named characters, then fill to N_AGENTS with random citizens."""
-    named = [
-        Agent("Marcus Aurelius", "Senator", 100, 20),
-        Agent("Gaius Petronius", "Merchant", 98, 21),
-        Agent("Lucius Verus", "Senator", 100, 19),
-        Agent("Spartacus", "Gladiator", 96, 22),
-        # Agent("Maximus", "Gladiator", 150, 98),
-        # Agent("Quintus", "Guard (Legionary)", 140, 90),
-        # Agent("Publius", "Plebeian", 65, 35),
-        # Agent("Claudia", "Merchant", 78, 40),
-        # Agent("Servius", "Craftsman", 85, 32),
-        # Agent("Cornelia", "Patrician", 50, 88),
-        # Agent("Tiberius", "Guard (Legionary)", 55, 85),
-        # Agent("Flavia", "Priest", 135, 30),
-        # Agent("Decimus", "Merchant", 145, 42),
-    ]
-
-    agents = list(named)
-    used_names = {a.name for a in agents}
-    used_positions = {(a.x, a.y) for a in agents}
-
-    n_random = max(0, N_AGENTS - len(agents))
-    if n_random > 0 and world is not None:
-        print(f"  Generating {n_random} random citizens...")
-        roles = list(ROLE_WEIGHTS.keys())
-        weights = list(ROLE_WEIGHTS.values())
-        for _ in range(n_random):
-            role = random.choices(roles, weights=weights, k=1)[0]
-            is_female = random.random() < 0.35
-            name = _generate_roman_name(is_female, used_names)
-            x, y = _find_spawn_point(world, role, used_positions)
-            agents.append(Agent(name, role, x, y))
-
-    return agents
-
-
-def create_legionaries(world):
-    """Spawn an 8-man contubernium on Via Sacra patrol (~x=95, y=48)."""
-    names = [
-        "Titus Pullo", "Lucius Vorenus", "Gaius Crastinus", "Marcus Petreius",
-        "Quintus Balbus", "Aulus Hirtius", "Sextus Baculus", "Publius Sulla",
-    ]
-    soldiers = []
-    for i, name in enumerate(names):
-        x = 95 + (i % 4) * 2
-        y = 48 + (i // 4) * 2
-        soldiers.append(Agent(name, "Legionary", x, y))
-    return soldiers
-
-
-def create_animals(world):
-    """Spawn wolves, dogs, boars, and ravens across the map."""
-    from roma_aeterna.agent.animal import Animal
-    animals = []
-    # 6 wolves — western edge, drought refugees from the hills
-    for i, (x, y) in enumerate([(8, 60), (9, 63), (7, 67), (10, 70), (8, 74), (11, 77)]):
-        animals.append(Animal("wolf", x, y, f"Wolf {i + 1}"))
-    # 4 stray dogs — scattered through the city
-    for i, (x, y) in enumerate([(55, 55), (75, 80), (120, 60), (90, 100)]):
-        animals.append(Animal("dog", x, y, f"Stray Dog {i + 1}"))
-    # 2 boars — eastern gardens
-    for i, (x, y) in enumerate([(160, 80), (170, 95)]):
-        animals.append(Animal("boar", x, y, f"Wild Boar {i + 1}"))
-    # 3 ravens — high perches, scattered
-    for i, (x, y) in enumerate([(100, 30), (130, 50), (80, 70)]):
-        animals.append(Animal("raven", x, y, f"Raven {i + 1}"))
-    return animals
+from roma_aeterna.config import SCENARIO
 
 
 def main():
+    scenario = get_scenario(SCENARIO)
+
     print("=" * 50)
-    print("  ROME: AETERNA — Forum Romanum District")
-    print("  c. 161 AD, Reign of Marcus Aurelius")
+    for line in scenario.title_lines:
+        print(f"  {line}")
     print("=" * 50)
     print()
 
@@ -208,32 +41,28 @@ def main():
         print("  Starting new simulation.")
 
     print()
-    print("Generating world...")
+    print(f"Generating world (scenario: {SCENARIO})...")
 
-    world = WorldGenerator.generate_rome()
+    world = scenario.generate_world()
 
     print(f"  Map: {world.width}x{world.height} tiles")
     print(f"  Objects: {len(world.objects)}")
     print(f"  Landmarks: {list(world.landmarks.keys())}")
 
-    agents = create_agents(world)
-    legionaries = create_legionaries(world)
-    animals = create_animals(world)
+    human_agents = scenario.create_agents(world)
+    animals = scenario.create_animals(world)
 
-    human_agents = agents + legionaries
-    print(f"  Citizens: {len(human_agents)} ({N_AGENTS} configured + {len(legionaries)} legionaries)")
-
-    from collections import Counter
+    print(f"  Citizens: {len(human_agents)}")
     role_counts = Counter(
         a.role for a in human_agents
         if not getattr(a, "is_animal", False)
     )
     for role, count in sorted(role_counts.items(), key=lambda x: -x[1]):
         print(f"    {role}: {count}")
-    print(f"  Animals: {len(animals)} ({sum(1 for a in animals if a.animal_type == 'wolf')} wolves, "
-          f"{sum(1 for a in animals if a.animal_type == 'dog')} dogs, "
-          f"{sum(1 for a in animals if a.animal_type == 'boar')} boars, "
-          f"{sum(1 for a in animals if a.animal_type == 'raven')} ravens)")
+
+    animal_counts = Counter(getattr(a, "animal_type", "unknown") for a in animals)
+    animal_summary = ", ".join(f"{c} {t}s" for t, c in sorted(animal_counts.items()))
+    print(f"  Animals: {len(animals)}" + (f" ({animal_summary})" if animal_summary else ""))
 
     print()
     print("Starting simulation...")

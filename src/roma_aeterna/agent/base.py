@@ -30,6 +30,7 @@ from roma_aeterna.config import (
     AMBIENT_TEMP_BASE,
     LIF_BASELINE_URGENCY, LIF_ENV_FIRE_WEIGHT,
     LIF_ENV_NIGHT_URGENCY,
+    MOVEMENT_TICKS_PER_TILE,
 )
 
 
@@ -60,6 +61,7 @@ class Agent:
         self.max_health: float = 100.0
         self.is_alive: bool = True
         self.death_tick: int = -1
+        self.last_hit_tick: int = -999
 
         # --- Personality (must be set before brain, which uses self.role) ---
         self.personality_seed: Dict[str, Any] = personality_seed or {}
@@ -74,6 +76,7 @@ class Agent:
         self.autopilot = Autopilot()
         self._perception = PerceptionSystem(self)
         self.current_time: float = 0.0
+        self.sim_tick: int = 0      # Set by engine each tick; use for memory timestamps
 
         # --- State ---
         self.action: str = "IDLE"
@@ -123,10 +126,10 @@ class Agent:
         # Seed per-agent so it's deterministic but unique
         _rng.seed(hash(self.uid) + 42)
         
-        # Thresholds calibrated for the new urgency scale (baseline=0.3, linear+quadratic
-        # drives). At rest (urgency ~2.0), the roles fire at these approximate intervals:
-        #   Gladiator ~12s, Guard ~15s, Merchant/Plebeian ~18s, Senator ~27s, Priest ~35s
-        # At critical drives (urgency ~26) all roles fire within 1-2s.
+        # Thresholds calibrated for the urgency scale (baseline=0.6, linear+quadratic drives).
+        # At mild drives (~20% each), urgency ≈ 5.0. Approximate fire intervals at TPS=30:
+        #   Gladiator ~5s, Guard ~6s, Merchant/Plebeian ~7s, Senator ~10s, Priest ~13s
+        # At critical drives (urgency ~26) all roles fire every 2-5s (refractory-limited).
         role_profiles = {
             "Senator":          {"threshold": 25.0, "decay": 0.06, "refractory": 4.0},
             "Patrician":        {"threshold": 22.0, "decay": 0.07, "refractory": 3.5},
@@ -162,6 +165,7 @@ class Agent:
         self.memory.add_belief("fire", "is extremely dangerous and spreads fast", 1.0, "common knowledge")
         self.memory.add_belief("the Tiber", "provides water but floods sometimes", 0.7, "common knowledge")
         self.memory.add_belief("fountains", "provide clean drinking water", 0.9, "common knowledge")
+        self.memory.learn_location("Temple of Jupiter Optimus Maximus", (30, 76))
 
     # ================================================================
     # COMBAT
@@ -170,10 +174,11 @@ class Agent:
     def take_damage(self, amount: float) -> None:
         """Apply direct damage and trigger death if HP hits zero."""
         self.health = max(0.0, self.health - amount)
+        self.last_hit_tick = self.sim_tick
         if self.health <= 0 and self.is_alive:
             self.is_alive = False
             self.action = "DEAD"
-            self.death_tick = int(self.current_time)
+            self.death_tick = self.sim_tick
 
     # ================================================================
     # CONVERSATION — Incoming speech triggers responses
@@ -247,7 +252,7 @@ class Agent:
         if not tile.is_walkable:
             return False, f"The way {direction} is blocked ({tile.terrain_type})."
 
-        base_cost = max(1, int(tile.movement_cost))
+        base_cost = max(1, int(tile.movement_cost * MOVEMENT_TICKS_PER_TILE))
         self.movement_cooldown = base_cost
 
         self.x = float(nx)
@@ -373,7 +378,7 @@ class Agent:
                 self.status_effects.add(effect)
             self.memory.add_event(
                 f"Ate rotten {target_item.name} and got sick!",
-                tick=int(self.current_time), importance=4.0,
+                tick=self.sim_tick, importance=4.0,
                 tags=["negative", "food"],
             )
             # Strong negative preference — remember this!
@@ -503,7 +508,8 @@ class Agent:
             self.health -= 0.5 * dt
         if self.drives["thirst"] > 90:
             self.health -= 0.8 * dt
-        elif regen > 0 and self.drives["hunger"] < 50 and self.drives["energy"] < 50:
+        # Regen whenever not critically hungry or thirsty (same threshold as autopilot escalation)
+        if regen > 0 and self.drives["hunger"] < 70 and self.drives["thirst"] < 70:
             self.health = min(self.max_health, self.health + regen * dt)
 
         if self.health <= 0:
@@ -517,7 +523,7 @@ class Agent:
         if self.current_time - self._last_snapshot_time >= self._snapshot_interval:
             self._last_snapshot_time = self.current_time
             self.drive_snapshots.append({
-                "tick": int(self.current_time),
+                "tick": self.sim_tick,
                 "health": round(self.health, 1),
                 "drives": {k: round(v, 1) for k, v in self.drives.items()},
             })
@@ -538,7 +544,7 @@ class Agent:
           - Environmental urgency (nearby fire, night outdoors, distressed agents)
             — updated every LIF_ENV_UPDATE_INTERVAL ticks by the engine
         """
-        urgency = LIF_BASELINE_URGENCY  # 0.3 — small floor, drives dominate
+        urgency = LIF_BASELINE_URGENCY  # 0.6 — constant floor so neuron always eventually fires
 
         drive_weights = {
             "hunger": 10.0, "thirst": 12.0, "energy": 5.0,

@@ -12,6 +12,9 @@ VALID_ACTIONS = {
     "WORK",     # Perform role duties at a building
     "REFLECT",  # Write a personal note to long-term memory
     "ATTACK",   # Strike a nearby agent with a weapon or bare hands
+    "PRAY",     # Address Jupiter at a temple; may receive a divine response
+    "GIVE",     # Give an item to a nearby person (no reciprocation expected)
+    "SHOUT",    # Call out loudly to everyone nearby (wider radius than TALK)
 }
 
 DIRECTION_DELTAS: Dict[str, Tuple[int, int]] = {

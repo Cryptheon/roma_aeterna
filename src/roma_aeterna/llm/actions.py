@@ -52,6 +52,9 @@ class ActionExecutor:
             "CRAFT":    self._handle_craft,
             "REFLECT":  self._handle_reflect,
             "ATTACK":   self._handle_attack,
+            "PRAY":     self._handle_pray,
+            "GIVE":     self._handle_give,
+            "SHOUT":    self._handle_shout,
             "IDLE":     self._handle_idle,
         }
 
@@ -61,6 +64,29 @@ class ActionExecutor:
 
     def _handle_move(self, agent: Any, decision: Dict, tick: int) -> None:
         direction = decision.get("direction", "north")
+
+        # Check tile occupancy before attempting the move.
+        from roma_aeterna.agent.constants import DIRECTION_DELTAS
+        delta = DIRECTION_DELTAS.get(direction.lower().strip(), None)
+        if delta is not None:
+            nx, ny = int(agent.x) + delta[0], int(agent.y) + delta[1]
+            occupant = next(
+                (a for a in self.engine.agents
+                 if a is not agent and getattr(a, "is_alive", True)
+                 and int(a.x) == nx and int(a.y) == ny),
+                None,
+            )
+            if occupant:
+                agent.autopilot._consecutive_path_blocks += 1
+                agent.memory.add_event(
+                    f"The path {direction} is blocked by {occupant.name}.",
+                    tick=tick, importance=1.0, tags=["blocked"],
+                )
+                if agent.autopilot._consecutive_path_blocks >= 3:
+                    agent.autopilot.clear_path()
+                agent.action = "IDLE"
+                return
+
         success, msg = agent.move(direction, self.engine.world)
         if success:
             agent.autopilot._consecutive_path_blocks = 0
@@ -304,26 +330,67 @@ class ActionExecutor:
             None,
         )
         if location:
+            # Try full A* first
             agent.autopilot._set_path_toward(
                 agent, location, target, self.engine.world
             )
-            agent.action = "MOVING"
-            agent.memory.add_event(
-                f"Set off toward {target}.", tick=tick, importance=1.0,
-            )
+            # If A* returned nothing (surrounded or target unreachable), try a
+            # direct N-step walk in the raw direction — better than nothing.
+            if not agent.autopilot.path:
+                agent.autopilot._set_path_direct(
+                    agent, location, target, self.engine.world, n=20
+                )
+
+            if agent.autopilot.path:
+                agent.action = "MOVING"
+                agent.memory.add_event(
+                    f"Set off toward {target}.", tick=tick, importance=1.0,
+                )
+            else:
+                # Path completely blocked — give honest feedback so the LLM
+                # doesn't keep looping on the same failed GOTO.
+                # Suppress duplicates to avoid flooding memory.
+                already_noted = any(
+                    target.lower() in m.text.lower() and "blocked" in m.text
+                    for m in agent.memory.short_term[-4:]
+                )
+                if not already_noted:
+                    agent.memory.add_event(
+                        f"Tried to go to {target} but the way is completely "
+                        f"blocked from here. Cannot find a route.",
+                        tick=tick, importance=1.5, tags=["blocked"],
+                    )
+                agent.action = "IDLE"
         else:
-            agent.memory.add_event(
-                f"Wanted to go to {target} but don't know where it is.",
-                tick=tick, importance=1.0, tags=["blocked"],
+            # Suppress duplicate "don't know where X is" events — they flood
+            # short-term memory and evict useful context.
+            already_noted = any(
+                target.lower() in m.text.lower() and "don't know" in m.text
+                for m in agent.memory.short_term[-4:]
             )
+            if not already_noted:
+                agent.memory.add_event(
+                    f"Wanted to go to {target} but its location is unknown. "
+                    f"Ask someone nearby (TALK) or explore to find it.",
+                    tick=tick, importance=1.0, tags=["blocked"],
+                )
             agent.action = "IDLE"
 
     def _handle_work(self, agent: Any, decision: Dict, tick: int) -> None:
         agent.action = "WORKING"
         agent.drives["comfort"] = max(0, agent.drives["comfort"] - 3)
+        # Find the nearest building to name the workplace
+        nearest_bld = None
+        nearest_dist = 999.0
+        for obj in self.engine.world.objects:
+            d = math.sqrt((obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2)
+            if d < nearest_dist and d <= 12.0:
+                nearest_dist = d
+                nearest_bld = obj.name
+        at_str = f" at {nearest_bld}" if nearest_bld else ""
         agent.memory.add_event(
-            f"Worked as a {agent.role}.", tick=tick, importance=1.0,
-            tags=["work"],
+            f"You perform your duties as a {agent.role}{at_str}. Wages are paid in due course.",
+            tick=tick, importance=1.0, tags=["work"],
         )
 
     def _handle_inspect(self, agent: Any, decision: Dict, tick: int) -> None:
@@ -480,6 +547,165 @@ class ActionExecutor:
 
         agent.memory.update_relationship(target_agent.name, trust_delta=-10, tick=tick)
         agent.action = "ATTACKING"
+
+        # Notify renderer
+        if died:
+            self.engine.push_notification(
+                f"☠ {target_agent.name} slain by {agent.name}!", "death"
+            )
+
+        # Bystanders within 10 tiles witness the violence
+        for bystander in self.engine.agents:
+            if bystander.uid in (agent.uid, target_agent.uid) or not bystander.is_alive:
+                continue
+            if getattr(bystander, "is_animal", False):
+                continue
+            dist_b = math.sqrt(
+                (bystander.x - agent.x) ** 2 + (bystander.y - agent.y) ** 2
+            )
+            if dist_b <= 10.0:
+                bystander.memory.add_event(
+                    f"You witnessed {agent.name} attack {target_agent.name} with {weapon_name}!"
+                    + (" They are dead." if died else ""),
+                    tick=tick, importance=3.5,
+                    tags=["violence", "danger", "negative"],
+                )
+                bystander.brain.potential += 3.0  # Startle reaction
+
+    def _handle_pray(self, agent: Any, decision: Dict, tick: int) -> None:
+        prayer_text = decision.get("speech", "").strip()
+
+        if not prayer_text:
+            agent.memory.add_event(
+                "You knelt before the altar in silence, words failing you.",
+                tick=tick, importance=1.5, memory_type="observation",
+            )
+            agent.action = "IDLE"
+            return
+
+        # Find a nearby temple (agent should GOTO first)
+        import math as _math
+        from roma_aeterna.config import PERCEPTION_RADIUS
+        temple = None
+        for obj in self.engine.world.objects:
+            if "temple" not in obj.name.lower():
+                continue
+            dist = _math.sqrt((obj.x - agent.x) ** 2 + (obj.y - agent.y) ** 2)
+            if dist <= PERCEPTION_RADIUS:
+                temple = obj
+                break
+
+        if temple is None:
+            agent.memory.add_event(
+                "You tried to pray but found no temple nearby. You must go to a temple first.",
+                tick=tick, importance=1.5, memory_type="observation",
+            )
+            agent.action = "IDLE"
+            return
+
+        agent.memory.add_event(
+            f"You knelt before {temple.name} and prayed to Jupiter: \"{prayer_text}\"",
+            tick=tick, importance=4.0, memory_type="observation",
+            tags=["prayer", "ritual", "jupiter"],
+        )
+        agent.action = "INTERACT"
+
+        with self.engine.lock:
+            self.engine.pending_prayers.append({
+                "agent_uid": agent.uid,
+                "agent_name": agent.name,
+                "temple": temple.name,
+                "prayer": prayer_text,
+                "tick": tick,
+            })
+
+    def _handle_give(self, agent: Any, decision: Dict, tick: int) -> None:
+        target_name = decision.get("target", "")
+        item_name = (decision.get("item") or decision.get("offer", "")).strip()
+
+        target_agent = None
+        for other in self.engine.agents:
+            if (other.name.lower() == target_name.lower()
+                    and other.is_alive and other.uid != agent.uid):
+                dist = math.sqrt(
+                    (other.x - agent.x) ** 2 + (other.y - agent.y) ** 2
+                )
+                if dist <= NEARBY_AGENT_RADIUS:
+                    target_agent = other
+                    break
+
+        if not target_agent:
+            agent.memory.add_event(
+                f"{target_name} is not close enough to give to.",
+                tick=tick, importance=1.0, tags=["blocked"],
+            )
+            agent.action = "IDLE"
+            return
+
+        item = next(
+            (i for i in agent.inventory if i.name.lower() == item_name.lower()),
+            None,
+        )
+        if not item:
+            agent.memory.add_event(
+                f"You don't have {item_name!r} to give.",
+                tick=tick, importance=1.0, tags=["blocked"],
+            )
+            agent.action = "IDLE"
+            return
+
+        from roma_aeterna.config import MAX_INVENTORY_SIZE
+        if len(target_agent.inventory) >= MAX_INVENTORY_SIZE:
+            agent.memory.add_event(
+                f"{target_name}'s hands are already full — they cannot take {item.name}.",
+                tick=tick, importance=1.0,
+            )
+            agent.action = "IDLE"
+            return
+
+        agent.inventory.remove(item)
+        target_agent.inventory.append(item)
+
+        agent.memory.add_event(
+            f"You gave your {item.name} to {target_name}.",
+            tick=tick, importance=2.0, memory_type="event",
+            tags=["social", "positive"], related_agent=target_name,
+        )
+        target_agent.memory.add_event(
+            f"{agent.name} gave you their {item.name}.",
+            tick=tick, importance=2.5, memory_type="event",
+            tags=["social", "positive"], related_agent=agent.name,
+        )
+        agent.memory.update_relationship(target_name, trust_delta=5.0, tick=tick)
+        target_agent.memory.update_relationship(agent.name, trust_delta=8.0, tick=tick)
+        agent.drives["social"] = max(0, agent.drives["social"] - 8)
+        agent.action = "TRADING"
+
+    def _handle_shout(self, agent: Any, decision: Dict, tick: int) -> None:
+        speech = decision.get("speech", "").strip()
+        if not speech:
+            agent.action = "IDLE"
+            return
+
+        agent.last_speech = speech
+        agent.memory.add_event(
+            f"You shouted to all nearby: \"{speech}\"",
+            tick=tick, importance=2.0, memory_type="event",
+        )
+        agent.drives["social"] = max(0, agent.drives["social"] - 15)
+        agent.action = "TALKING"
+
+        from roma_aeterna.core.events import Event, EventType
+        self.engine.event_bus.emit(
+            Event(
+                event_type=EventType.SPEECH.value,
+                origin=(int(agent.x), int(agent.y)),
+                radius=20.0,   # Much wider than TALK's 6.0
+                data={"speech": speech, "shout": True},
+                source_agent=agent.name,
+                importance=2.5,
+            )
+        )
 
     def _handle_idle(self, agent: Any, decision: Dict, tick: int) -> None:
         agent.action = "IDLE"
