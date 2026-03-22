@@ -82,6 +82,11 @@ class Animal:
         self._tick_counter: int = 0
         self._move_interval: int = stats["speed_interval"]
 
+        # Optional home-range constraint (set by scenarios to keep animals in bounds)
+        self.home_x: Optional[float] = None
+        self.home_y: Optional[float] = None
+        self.home_radius: Optional[float] = None
+
     # ================================================================
     # ENGINE INTERFACE
     # ================================================================
@@ -292,6 +297,12 @@ class Animal:
         self._move_toward(self.x * 2 - tx, self.y * 2 - ty, world)
 
     def _wander(self, world: Any) -> None:
+        # If outside home range, step back toward home instead of wandering freely
+        if (self.home_x is not None and self.home_radius is not None
+                and _dist_xy(self.x, self.y, self.home_x, self.home_y) > self.home_radius):
+            self._move_toward(self.home_x, self.home_y, world)
+            self.action = "WANDERING"
+            return
         dx, dy = random.choice([
             (-1, 0), (1, 0), (0, -1), (0, 1),
             (-1, -1), (1, -1), (-1, 1), (1, 1),

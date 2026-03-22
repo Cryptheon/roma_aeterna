@@ -46,7 +46,7 @@ COLORS = {
     "circus_spina":     (180, 165, 135),
     
     # Structure
-    "wall":             (188, 175, 155),
+    "wall":             (105,  90,  72),
     "building_floor":   (178, 165, 142),
     
     # --- Building Materials ---

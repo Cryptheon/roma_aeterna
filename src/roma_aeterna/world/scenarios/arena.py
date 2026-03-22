@@ -256,6 +256,12 @@ class GladiatorArenaScenario(BaseScenario):
         ]:
             world.add_object(create_prefab("Torch", tx, ty))
 
+        # ── Water trough on the arena floor (gladiators can drink without leaving) ──
+        trough = create_prefab("Fountain", _CX - 8, _CY - 6)
+        trough.name = "Water Trough"
+        world.add_object(trough)
+        world.register_landmark("Water Trough", trough)
+
         # ── Decorative columns flanking the north tunnel entrance ──
         for cx in (_CX - 5, _CX + 5):
             world.add_object(create_prefab("Column", cx, _CY - _SAND_RY - 2))
@@ -279,6 +285,11 @@ class GladiatorArenaScenario(BaseScenario):
             Agent("Batiatus",   "Merchant",  14,        _FORECOURT_MID_Y),
             Agent("Galen",      "Craftsman", _W - 14,   _FORECOURT_MID_Y),
         ]
+
+        # Teach all agents about the water trough so they drink on-site
+        trough_pos = (_CX - 8, _CY - 6)
+        for a in named:
+            a.memory.learn_location("Water Trough", trough_pos)
 
         agents = list(named)
         used_names = {a.name for a in agents}
@@ -326,9 +337,18 @@ class GladiatorArenaScenario(BaseScenario):
             (_CX + 12, _CY - 2),    # east side of sand
         ]
         for i, (x, y) in enumerate(wolf_positions):
-            animals.append(Animal("wolf", x, y, f"Arena Wolf {i + 1}"))
-        # Boar — centre of the arena floor
-        animals.append(Animal("boar", _CX, _CY + 8, "Arena Boar 1"))
-        # Raven — perched above the arena
+            wolf = Animal("wolf", x, y, f"Arena Wolf {i + 1}")
+            # Constrain wolves to the sand floor so they don't wander out the tunnels
+            wolf.home_x = float(_CX)
+            wolf.home_y = float(_CY)
+            wolf.home_radius = float(_SAND_RX)
+            animals.append(wolf)
+        # Boar — centre of the arena floor; keep it on the sand too
+        boar = Animal("boar", _CX, _CY + 8, "Arena Boar 1")
+        boar.home_x = float(_CX)
+        boar.home_y = float(_CY)
+        boar.home_radius = float(_SAND_RX)
+        animals.append(boar)
+        # Raven — perched above the arena; free to fly
         animals.append(Animal("raven", _CX, 3, "Raven"))
         return animals
