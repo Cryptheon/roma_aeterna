@@ -175,7 +175,7 @@ EXAMPLES (for format only — choose your OWN action):
 {examples}"""
 
 ACTION_JSON_TEMPLATE = """
-Respond with raw JSON only. No markdown. Only include keys your action needs.
+Respond with raw JSON only. No markdown. Only include keys your action needs. When you TALK/SHOUT/PRAY or think (thought) be brief! Don't talk a lot.
 
 {{
     "thought": "your inner monologue (1-2 sentences)",
