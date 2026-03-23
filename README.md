@@ -91,18 +91,47 @@ Historical Rome c. 161 AD, during the reign of Marcus Aurelius. A 200×150 tile 
 - 455+ world objects, 8 named characters + legionary contubernium
 
 ### `gladiator_arena`
-The Flavian Amphitheatre c. 80 AD — a compact 80×60 tile map focused on the arena itself:
+The Flavian Amphitheatre c. 80 AD — a 120×90 tile map focused on the arena itself:
 - Four elliptical terrain layers: outer wall → spectator concourse → inner podium wall → sand fighting floor
 - North/south entrance tunnels (Gate of Life / Gate of Death)
 - Armory (west) and Medical Tent (east) in the north forecourt
-- Spartacus, Crixus, Batiatus (lanista), Galen (physician), arena guards, wolves, and a boar
+- 5 named gladiators (Spartacus, Crixus, Flamma, Vercinix, Tetraites), 6 guards deployed on the sand
+- 8 wolves and a boar confined to the arena by home-range constraints
+
+### `gladiator_fight`
+The same Colosseum map as `gladiator_arena`, reused wholesale, but the combatants are two armed human factions:
+- **West half — Vandal warriors**: Genseric (chieftain), Huneric, Thrasamund, Godomar, Ragnachar, Hilderic, Alaric, Radagaisus
+- **East half — Roman Legionaries**: Titus Pullo (centurion), Lucius Vorenus, Gaius Crastinus, Marcus Petreius, Sextus Baculus, Aulus Hirtius, Publius Sulla, Quintus Galba
+- 7 wolves released across the sand floor as a third hazard; 2 ravens overhead
+- Both sides receive a high-importance context memory naming the enemy and ordering them to fight
+
+### `curia_pompei`
+The Curia of Pompey, Rome — 44 BC, the days before the Ides of March. A 60×50 tile marble hall:
+- Raised podium at the north end with the Statue of Pompey and the Curule Chair
+- Colonnade of columns along both sides; Altar of the Lares and a Senate Notice Board at the south
+- 5 historical senators: **Julius Caesar**, **Marcus Junius Brutus**, **Gaius Cassius Longinus**, **Marcus Tullius Cicero**, **Marcus Antonius**
+- Caesar, Brutus, Cassius, and Antony carry a Gladius on top of their senatorial kit
+- All senators receive a context memory about the mounting political tension
+- No animals — pure political drama, debate, and intrigue
+
+### `sack_of_rome`
+The Sack of Rome, 455 AD — Vandal warbands pour through the Forum Romanum while Roman defenders hold key positions. Uses the full Rome map with the camera locked to the Forum district:
+- **~15 Vandal warriors** in three waves: flooding from the Subura (north), east flank near the Arch of Titus, and already deep inside the Forum
+- **~10 Roman defenders** (Legionaries and Guards) anchoring the Rostra, Curia Julia, and Basilica Julia
+- Named leaders: **Genseric**, **Huneric**, **Radagaisus** (Vandals) vs **Petronius Maximus**, **Aetius Calvus**, **Flavius Rufus** (Romans)
+- All combatants carry weapons and receive faction-specific high-importance context memories
+- Additional agents scale with `N_AGENTS` (55 % Vandal / 25 % Legionary / 20 % Guard weighting)
+- 2 ravens overhead; no wolves
 
 To switch scenarios, edit `config.py`:
 ```python
-SCENARIO = "gladiator_arena"  # or "rome"
+# Available: "rome" | "gladiator_arena" | "gladiator_fight" | "curia_pompei" | "sack_of_rome"
+SCENARIO = "gladiator_fight"
 ```
 
 Adding a new scenario means subclassing `BaseScenario` in `world/scenarios/` and registering it in `SCENARIO_REGISTRY`.
+
+![Rome: Aeterna Simulation Interface](assets/screenshots/gladiator_scenario.png)
 
 ---
 
@@ -150,7 +179,7 @@ All global tuning lives in `src/roma_aeterna/config.py`. Key settings:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `SCENARIO` | `"rome"` | Active scenario: `"rome"` or `"gladiator_arena"` |
+| `SCENARIO` | `"rome"` | Active scenario — see [Scenarios](#scenarios) for all options |
 | `N_AGENTS` | `2` | Random citizens to spawn on top of named characters |
 | `TPS` | `30` | Simulation ticks per second |
 | `GRID_WIDTH` / `GRID_HEIGHT` | `200` / `150` | Default map dimensions (Rome scenario) |
